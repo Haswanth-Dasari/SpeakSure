@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
+import sys
 from functools import lru_cache
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from src.speaksure.configuration import (
@@ -31,6 +34,43 @@ SUPPORTED_AUDIO_TYPES = frozenset(
         "audio/x-wav",
     }
 )
+
+
+def _configure_windows_cuda_dlls() -> None:
+    """Add installed NVIDIA package DLL folders to this process's PATH on Windows."""
+    if sys.platform != "win32":
+        return
+
+    nvidia_spec = importlib.util.find_spec("nvidia")
+    if nvidia_spec is None or nvidia_spec.submodule_search_locations is None:
+        return
+
+    dll_directories = []
+    for package_root in nvidia_spec.submodule_search_locations:
+        root = Path(package_root)
+        if not root.is_dir():
+            continue
+        for package_directory in sorted(root.iterdir()):
+            dll_directory = package_directory / "bin"
+            if dll_directory.is_dir() and next(dll_directory.glob("*.dll"), None):
+                dll_directories.append(dll_directory)
+
+    if not dll_directories:
+        return
+
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    existing_paths = {
+        os.path.normcase(os.path.abspath(entry))
+        for entry in path_entries
+        if entry
+    }
+    directories_to_add = [
+        str(directory)
+        for directory in dll_directories
+        if os.path.normcase(os.path.abspath(directory)) not in existing_paths
+    ]
+    if directories_to_add:
+        os.environ["PATH"] = os.pathsep.join([*directories_to_add, *path_entries])
 
 
 class SpeechToTextError(RuntimeError):
@@ -164,6 +204,7 @@ def resolve_local_device(preference: str) -> str:
     if preference == "cpu":
         return "cpu"
     try:
+        _configure_windows_cuda_dlls()
         import ctranslate2
 
         cuda_available = ctranslate2.get_cuda_device_count() > 0
@@ -186,6 +227,7 @@ def _cached_local_model(
     model_size: str, device_preference: str
 ) -> tuple[WhisperModelLike, str, str]:
     """Load and cache a model; auto mode falls back to CPU int8 on CUDA load errors."""
+    _configure_windows_cuda_dlls()
     try:
         from faster_whisper import WhisperModel
     except ImportError:

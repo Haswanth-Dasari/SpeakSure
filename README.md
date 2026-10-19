@@ -30,7 +30,7 @@ SPEECH_TO_TEXT_MODEL_SIZE=base
 SPEECH_TO_TEXT_DEVICE=auto
 ```
 
-The `base` model is a practical starting point for a 6 GB GPU and CPU fallback. `small` may be more accurate but uses more memory and runs slower. `SPEECH_TO_TEXT_DEVICE=auto` uses CUDA only when CTranslate2 reports a CUDA device; otherwise it uses CPU `int8`. If CUDA model initialization or inference fails in auto mode, local inference retries with CPU `int8`. Set the device to `cuda` to require CUDA (no CPU fallback), or `cpu` to force CPU. CUDA acceleration requires compatible NVIDIA drivers and CUDA/cuDNN libraries recognized by CTranslate2; an installed NVIDIA GPU alone does not guarantee CUDA inference. For example, a missing `cublas64_12.dll` means the CUDA runtime cannot execute inference; auto mode uses CPU and the app reports CPU as the actual device.
+The `base` model is a practical starting point for a 6 GB GPU and CPU fallback. `small` may be more accurate but uses more memory and runs slower. `SPEECH_TO_TEXT_DEVICE=auto` uses CUDA only when CTranslate2 reports a CUDA device; otherwise it uses CPU `int8`. If CUDA model initialization or inference fails in auto mode, local inference retries with CPU `int8`. Set the device to `cuda` to require CUDA (no CPU fallback), or `cpu` to force CPU. CUDA acceleration requires compatible NVIDIA drivers and CUDA/cuDNN libraries recognized by CTranslate2; an installed NVIDIA GPU alone does not guarantee CUDA inference. On Windows, SpeakSure discovers DLL folders in installed NVIDIA Python packages and adds them to the current process's PATH before importing CTranslate2 or Faster-Whisper. It does not modify the machine-wide PATH.
 
 The first local use downloads model weights to the faster-whisper/Hugging Face cache and needs an internet connection. Later runs reuse that cache. Local recordings and transcripts are processed in memory; SpeakSure does not send audio to a transcription service or store audio recordings.
 
@@ -57,7 +57,7 @@ Set-Location 'C:\Users\Haswanth\Desktop\NLP_Project\SpeakSure'
 
 For CPU-only operation, set `SPEECH_TO_TEXT_DEVICE=cpu`; faster-whisper uses `int8` CPU inference. If CUDA is explicitly requested and CTranslate2 cannot initialize it, configure CPU mode. Model download failures need an internet connection on the first load; model loading errors, unavailable CUDA, unsupported audio, and inference errors are reported without switching to the OpenAI backend.
 
-On the current development machine, CTranslate2 detects the RTX 3050, but inference reports a missing `cublas64_12.dll`; automatic mode therefore falls back to CPU `int8`. Microphone transcription has been reported to work on CPU, but it is slower and may misrecognize names and uncommon words. Review and correct the editable transcript before submitting. GPU operation and recognition accuracy should be rechecked when the CUDA runtime is available.
+CPU fallback remains available when CUDA libraries are missing or CUDA initialization fails. Review and correct the editable transcript before submitting. GPU availability and successful inference depend on the local driver and installed CUDA libraries.
 
 ## Tests
 

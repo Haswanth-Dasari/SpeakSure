@@ -1,4 +1,6 @@
+import builtins
 import io
+import os
 import sys
 import wave
 from types import ModuleType
@@ -218,6 +220,72 @@ def test_local_provider_and_model_defaults(monkeypatch):
     assert LocalTranscriptionConfig.from_env() == LocalTranscriptionConfig(
         model_size="base", device="auto"
     )
+
+
+def test_windows_cuda_dll_directories_are_added_to_process_path(tmp_path, monkeypatch):
+    nvidia_root = tmp_path / "site-packages" / "nvidia"
+    expected_directories = []
+    for package in ("cublas", "cudnn", "cuda_nvrtc"):
+        dll_directory = nvidia_root / package / "bin"
+        dll_directory.mkdir(parents=True)
+        (dll_directory / f"{package}.dll").touch()
+        expected_directories.append(str(dll_directory))
+
+    spec = SimpleNamespace(submodule_search_locations=[str(nvidia_root)])
+    monkeypatch.setattr(speech_to_text.sys, "platform", "win32")
+    monkeypatch.setattr(speech_to_text.importlib.util, "find_spec", lambda name: spec)
+    monkeypatch.setenv("PATH", "existing-path")
+
+    speech_to_text._configure_windows_cuda_dlls()
+
+    path_entries = os.environ["PATH"].split(os.pathsep)
+    assert set(path_entries[:3]) == set(expected_directories)
+    assert path_entries[3:] == ["existing-path"]
+
+    speech_to_text._configure_windows_cuda_dlls()
+    assert os.environ["PATH"].split(os.pathsep) == path_entries
+
+
+def test_windows_cuda_dll_setup_is_noop_on_other_platforms(monkeypatch):
+    monkeypatch.setattr(speech_to_text.sys, "platform", "linux")
+    monkeypatch.setenv("PATH", "unchanged-path")
+    monkeypatch.setattr(
+        speech_to_text.importlib.util,
+        "find_spec",
+        lambda name: pytest.fail("NVIDIA package lookup should be Windows-only"),
+    )
+
+    speech_to_text._configure_windows_cuda_dlls()
+    assert os.environ["PATH"] == "unchanged-path"
+
+
+def test_cuda_dll_setup_precedes_runtime_dependency_imports(monkeypatch):
+    events = []
+    faster_whisper = ModuleType("faster_whisper")
+    faster_whisper.WhisperModel = lambda *args, **kwargs: object()
+    ctranslate2 = ModuleType("ctranslate2")
+    ctranslate2.get_cuda_device_count = lambda: 1
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+    monkeypatch.setitem(sys.modules, "ctranslate2", ctranslate2)
+    monkeypatch.setattr(
+        speech_to_text,
+        "_configure_windows_cuda_dlls",
+        lambda: events.append("configure"),
+    )
+    original_import = builtins.__import__
+
+    def tracked_import(name, *args, **kwargs):
+        if name in {"faster_whisper", "ctranslate2"}:
+            assert events[-1] == "configure"
+            events.append(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", tracked_import)
+
+    _, device, compute_type = _cached_local_model("base", "auto")
+
+    assert (device, compute_type) == ("cuda", "float16")
+    assert events == ["configure", "faster_whisper", "configure", "ctranslate2"]
 
 
 def test_openai_provider_remains_explicit_and_requires_configuration(monkeypatch):
