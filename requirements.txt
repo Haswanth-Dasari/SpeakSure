@@ -1,0 +1,5 @@
+streamlit>=1.39.0
+pytest
+openai
+python-dotenv
+faster-whisper>=1.1.0
