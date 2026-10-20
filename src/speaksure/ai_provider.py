@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
-from src.speaksure.configuration import get_api_key, get_chat_model
+from .configuration import get_api_key, get_chat_model
 
 
 class ConversationProvider(Protocol):

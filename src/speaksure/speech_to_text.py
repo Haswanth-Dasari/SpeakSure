@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
-from src.speaksure.configuration import (
+from .configuration import (
     ENV_FILE,
     get_api_key,
     get_local_device,
