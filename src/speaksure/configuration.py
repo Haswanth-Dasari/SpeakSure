@@ -48,3 +48,18 @@ def get_local_model_size() -> str:
 def get_local_device() -> str:
     """Return the preferred local inference device."""
     return os.environ.get("SPEECH_TO_TEXT_DEVICE", "").strip().lower() or "auto"
+
+
+def get_speech_to_text_language() -> str:
+    """Return the local Whisper language or its default."""
+    return os.environ.get("SPEECH_TO_TEXT_LANGUAGE", "").strip().lower() or "en"
+
+
+def get_speech_to_text_vad_filter() -> str:
+    """Return the configured local voice-activity-detection setting."""
+    return os.environ.get("SPEECH_TO_TEXT_VAD_FILTER", "").strip().lower() or "true"
+
+
+def get_speech_to_text_hotwords() -> str:
+    """Return configured local transcription hotwords."""
+    return os.environ.get("SPEECH_TO_TEXT_HOTWORDS", "").strip()
