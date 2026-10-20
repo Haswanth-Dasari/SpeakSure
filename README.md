@@ -41,7 +41,7 @@ SpeakSure loads the project-root `.env` independently of the shell's current dir
 Run this safe diagnostic from PowerShell in the project root. It reports the selected provider/model, device available to CTranslate2, initialized device, and dependency presence. Before the first successful transcription in that Python process, `actual_device` is `not-initialized`; the app also displays the device used after local inference. The diagnostic never prints the API key:
 
 ```powershell
-Set-Location 'C:\Users\Haswanth\Desktop\NLP_Project\SpeakSure'
+Set-Location '<project-root>'
 & '.\.venv\Scripts\python.exe' -c "import json; from src.speaksure.speech_to_text import diagnose_transcription_configuration; print(json.dumps(diagnose_transcription_configuration(), indent=2))"
 ```
 
@@ -50,7 +50,7 @@ Microphone recording uses Streamlit's built-in `st.audio_input` and requires a s
 Install dependencies in the project virtual environment:
 
 ```powershell
-Set-Location 'C:\Users\Haswanth\Desktop\NLP_Project\SpeakSure'
+Set-Location '<project-root>'
 & '.\.venv\Scripts\python.exe' -m pip install -r requirements.txt
 & '.\.venv\Scripts\python.exe' -m streamlit run app.py
 ```

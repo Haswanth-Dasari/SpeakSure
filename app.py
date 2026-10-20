@@ -16,7 +16,7 @@ from src.speaksure.speech_to_text import (
     SpeechToTextError, create_speech_to_text_provider,
 )
 
-st.set_page_config(page_title="SpeakSure", page_icon="??", layout="wide")
+st.set_page_config(page_title="SpeakSure", page_icon="🎙️", layout="wide")
 st.markdown("""<style>.block-container {max-width: 1000px; padding-top: 2.5rem;}
 [data-testid="stMetric"] {background: #f4f7fb; padding: 1rem; border-radius: 12px;}</style>""", unsafe_allow_html=True)
 st.title("?? SpeakSure")

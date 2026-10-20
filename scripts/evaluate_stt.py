@@ -1,4 +1,4 @@
-﻿import time
+import time
 import wave
 from pathlib import Path
 from statistics import median
