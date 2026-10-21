@@ -25,6 +25,38 @@ def get_api_key() -> str:
     return os.environ.get("OPENAI_API_KEY", "").strip()
 
 
+def get_groq_api_key() -> str:
+    """Return the configured Groq API key for internal provider use."""
+    return os.environ.get("GROQ_API_KEY", "").strip()
+
+
+def get_llm_model() -> str:
+    """Return the configured Groq chat model or its default."""
+    return os.environ.get("LLM_MODEL", "").strip() or "openai/gpt-oss-20b"
+
+
+def get_llm_reasoning_effort() -> str:
+    """Return the validated reasoning-effort setting for Groq chat completions."""
+    value = os.environ.get("LLM_REASONING_EFFORT", "low").strip().lower()
+    if value not in {"", "low", "medium", "high"}:
+        raise ValueError(
+            "LLM_REASONING_EFFORT must be one of: '', 'low', 'medium', or 'high'."
+        )
+    return value
+
+
+def get_llm_timeout_seconds() -> int:
+    """Return the validated Groq request timeout in seconds."""
+    value = os.environ.get("LLM_TIMEOUT_SECONDS", "").strip() or "20"
+    try:
+        timeout_seconds = int(value)
+    except ValueError as error:
+        raise ValueError("LLM_TIMEOUT_SECONDS must be an integer from 1 to 120.") from error
+    if not 1 <= timeout_seconds <= 120:
+        raise ValueError("LLM_TIMEOUT_SECONDS must be from 1 to 120.")
+    return timeout_seconds
+
+
 def get_chat_model() -> str:
     """Return the configured chat model or its default."""
     return os.environ.get("OPENAI_MODEL", "").strip() or "gpt-4o-mini"
