@@ -63,3 +63,32 @@ def get_speech_to_text_vad_filter() -> str:
 def get_speech_to_text_hotwords() -> str:
     """Return configured local transcription hotwords."""
     return os.environ.get("SPEECH_TO_TEXT_HOTWORDS", "").strip()
+
+
+def get_text_to_speech_voice() -> str:
+    """Return the configured Piper voice name or its default."""
+    return (
+        os.environ.get("TEXT_TO_SPEECH_VOICE", "").strip()
+        or "en_US-lessac-medium"
+    )
+
+
+def get_text_to_speech_models_dir() -> str:
+    """Return the configured Piper model directory or its default."""
+    return os.environ.get("TEXT_TO_SPEECH_MODELS_DIR", "").strip() or "models/piper"
+
+
+def get_text_to_speech_length_scale() -> float:
+    """Return the configured Piper speech length scale after range validation."""
+    value = os.environ.get("TEXT_TO_SPEECH_LENGTH_SCALE", "").strip() or "1.0"
+    try:
+        length_scale = float(value)
+    except ValueError as error:
+        raise ValueError(
+            "TEXT_TO_SPEECH_LENGTH_SCALE must be a number from 0.5 to 2.0."
+        ) from error
+    if not 0.5 <= length_scale <= 2.0:
+        raise ValueError(
+            "TEXT_TO_SPEECH_LENGTH_SCALE must be from 0.5 to 2.0."
+        )
+    return length_scale

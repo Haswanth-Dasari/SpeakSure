@@ -63,11 +63,13 @@ def main() -> int:
         on_event=report_event,
     )
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    saved_path = save_wav(
-        args.out_dir / f"capture_{timestamp}.wav",
-        captured.samples,
-        captured.sample_rate,
-    )
+    saved_path = None
+    if captured.stop_reason != "no_speech":
+        saved_path = save_wav(
+            args.out_dir / f"capture_{timestamp}.wav",
+            captured.samples,
+            captured.sample_rate,
+        )
     total_seconds = len(captured.samples) / captured.sample_rate
     print(f"Stop reason: {captured.stop_reason}")
     print(f"Thinking time: {captured.thinking_time_seconds:.2f} seconds")
@@ -75,7 +77,8 @@ def main() -> int:
     print(f"Total captured: {total_seconds:.2f} seconds")
     print(f"Noise RMS: {captured.noise_rms:.5f}")
     print(f"Threshold: {captured.threshold:.5f}")
-    print(f"Saved: {saved_path}")
+    if saved_path is not None:
+        print(f"Saved: {saved_path}")
 
     if captured.stop_reason == "no_speech":
         print("No speech was detected before the timeout.")

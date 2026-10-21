@@ -10,7 +10,7 @@ SpeakSure helps people build confidence in English communication through realist
 - Without an API key, the app clearly labels and cycles through curated scripted prompts for each practice mode. If an AI request fails, retry it or switch to scripted prompts; the submitted answer remains recorded once and the selected session configuration is preserved.
 - Record a response in the browser, transcribe it locally by default, and review or edit the recognized text before submitting. Typed answers remain available. OpenAI transcription remains available as an explicitly selected backend.
 
-The chosen duration is a session setting and does not enforce a timer. Audio is handled in memory for transcription and is not permanently stored by SpeakSure. Local audio inference stays on this computer; first use downloads the selected model from Hugging Face and therefore needs internet access. Text-to-speech and speech/emotion analysis are not implemented.
+The chosen duration is a session setting and does not enforce a timer. Audio is handled in memory for transcription and is not permanently stored by SpeakSure. Local audio inference stays on this computer; first use downloads the selected model from Hugging Face and therefore needs internet access. Speech synthesis uses Piper (GPL-licensed engine); each voice model has its own license, so see its model card on Hugging Face. Speech/emotion analysis is not implemented.
 
 ## Setup on Windows PowerShell
 

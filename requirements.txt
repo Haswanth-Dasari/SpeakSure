@@ -7,3 +7,4 @@ av>=11,<19
 jiwer
 numpy
 sounddevice
+piper-tts
