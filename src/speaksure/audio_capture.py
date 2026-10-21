@@ -9,7 +9,7 @@ import wave
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -73,9 +73,31 @@ class CapturedAnswer:
     threshold: float
 
 
+@dataclass(frozen=True)
+class NoiseProfile:
+    """Median calibration noise level and the derived speech threshold."""
+
+    noise_rms: float
+    threshold: float
+
+
 def _rms(frame: FloatFrame) -> float:
     """Return the root-mean-square amplitude for a single audio frame."""
     return float(np.sqrt(np.mean(np.square(frame, dtype=np.float64))))
+
+
+def _build_noise_profile(
+    calibration_frames: Sequence[FloatFrame], settings: CaptureSettings
+) -> NoiseProfile:
+    """Compute median calibration RMS and its configured detection threshold."""
+    if not calibration_frames:
+        raise ValueError("At least one calibration frame is required.")
+    noise_rms = float(np.median([_rms(frame) for frame in calibration_frames]))
+    threshold = max(
+        noise_rms * settings.threshold_multiplier,
+        settings.min_threshold,
+    )
+    return NoiseProfile(noise_rms=noise_rms, threshold=threshold)
 
 
 def _empty_answer(
@@ -100,6 +122,7 @@ def capture_answer(
     frames: Iterator[FloatFrame],
     settings: CaptureSettings | None = None,
     on_event: CaptureEvent | None = None,
+    noise_profile: NoiseProfile | None = None,
 ) -> CapturedAnswer:
     """Consume audio frames until speech ends or a configured limit is reached."""
     configuration = settings or CaptureSettings()
@@ -112,28 +135,36 @@ def capture_answer(
         wait_count = round(configuration.no_speech_timeout_seconds / FRAME_SECONDS)
         max_answer_count = round(configuration.max_answer_seconds / FRAME_SECONDS)
 
-        calibration_rms: list[float] = []
-        for _ in range(calibration_count):
-            try:
-                frame = np.asarray(next(iterator), dtype=np.float32)
-            except StopIteration:
-                return _empty_answer("source_ended", 0.0, 0.0, configuration.min_threshold)
-            if frame.ndim != 1 or frame.size != FRAME_SAMPLES:
-                raise ValueError(f"Each frame must contain {FRAME_SAMPLES} mono samples.")
-            calibration_rms.append(_rms(frame))
-
-        noise_rms = float(np.median(calibration_rms))
-        threshold = max(
-            noise_rms * configuration.threshold_multiplier,
-            configuration.min_threshold,
-        )
+        if noise_profile is None:
+            calibration_frames: list[FloatFrame] = []
+            for _ in range(calibration_count):
+                try:
+                    frame = np.asarray(next(iterator), dtype=np.float32)
+                except StopIteration:
+                    return _empty_answer(
+                        "source_ended", 0.0, 0.0, configuration.min_threshold
+                    )
+                if frame.ndim != 1 or frame.size != FRAME_SAMPLES:
+                    raise ValueError(
+                        f"Each frame must contain {FRAME_SAMPLES} mono samples."
+                    )
+                calibration_frames.append(frame)
+            active_profile = _build_noise_profile(
+                calibration_frames, configuration
+            )
+            frame_index = calibration_count
+        else:
+            active_profile = noise_profile
+            frame_index = 0
+        noise_rms = active_profile.noise_rms
+        threshold = active_profile.threshold
         if on_event is not None:
             on_event("calibrated", {"noise_rms": noise_rms, "threshold": threshold})
 
         preroll: deque[tuple[int, FloatFrame]] = deque(maxlen=preroll_count)
         onset_run: list[tuple[int, FloatFrame]] = []
         waiting_frames = 0
-        frame_index = calibration_count
+        waiting_start_index = frame_index
         onset_index: int | None = None
 
         while waiting_frames < wait_count:
@@ -153,7 +184,9 @@ def capture_answer(
                 if len(onset_run) >= configuration.onset_frames:
                     onset_run = onset_run[-configuration.onset_frames :]
                     onset_index = onset_run[0][0]
-                    thinking_time = (onset_index - calibration_count) * FRAME_SECONDS
+                    thinking_time = (
+                        onset_index - waiting_start_index
+                    ) * FRAME_SECONDS
                     pre_speech_frames = [
                         item for item in preroll if item[0] < onset_index
                     ]
@@ -240,6 +273,33 @@ def capture_answer(
             close()
 
 
+def calibrate_microphone(
+    settings: CaptureSettings | None = None,
+    device: int | str | None = None,
+) -> NoiseProfile:
+    """Capture calibration frames once and return their shared noise profile."""
+    configuration = settings or CaptureSettings()
+    calibration_count = round(configuration.calibration_seconds / FRAME_SECONDS)
+    frames = microphone_frames(device=device)
+    calibration_frames: list[FloatFrame] = []
+    try:
+        for _ in range(calibration_count):
+            try:
+                frame = np.asarray(next(frames), dtype=np.float32)
+            except StopIteration:
+                raise RuntimeError(
+                    "The microphone stopped before calibration completed."
+                ) from None
+            if frame.ndim != 1 or frame.size != FRAME_SAMPLES:
+                raise ValueError(f"Each frame must contain {FRAME_SAMPLES} mono samples.")
+            calibration_frames.append(frame)
+    finally:
+        close = getattr(frames, "close", None)
+        if close is not None:
+            close()
+    return _build_noise_profile(calibration_frames, configuration)
+
+
 def microphone_frames(device: int | str | None = None) -> Iterator[FloatFrame]:
     """Yield copied microphone frames from a lazily opened sounddevice stream."""
     try:
@@ -285,12 +345,14 @@ def record_answer(
     settings: CaptureSettings | None = None,
     device: int | str | None = None,
     on_event: CaptureEvent | None = None,
+    noise_profile: NoiseProfile | None = None,
 ) -> CapturedAnswer:
     """Capture microphone frames and detect the end of one spoken answer."""
     return capture_answer(
         microphone_frames(device=device),
         settings=settings,
         on_event=on_event,
+        noise_profile=noise_profile,
     )
 
 

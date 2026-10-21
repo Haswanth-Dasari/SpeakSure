@@ -9,6 +9,9 @@ from src.speaksure.audio_capture import (
     FRAME_SECONDS,
     SAMPLE_RATE,
     CaptureSettings,
+    NoiseProfile,
+    _build_noise_profile,
+    calibrate_microphone,
     capture_answer,
     wav_bytes,
 )
@@ -193,6 +196,79 @@ def test_capture_answer_closes_generator_source():
 
     assert result.stop_reason == "no_speech"
     assert closed
+
+
+def test_precalibrated_profile_skips_frames_and_times_thinking_from_first_frame():
+    """A supplied profile leaves all response frames available for detection."""
+    profile = NoiseProfile(noise_rms=0.002, threshold=0.008)
+    events = []
+    frames = (
+        _sequence("silence", 67)
+        + _sequence("speech", 100)
+        + _sequence("silence", 67)
+    )
+
+    result = capture_answer(
+        iter(frames),
+        _settings(end_silence_seconds=0.6, no_speech_timeout_seconds=8.0),
+        on_event=lambda event, details: events.append((event, details)),
+        noise_profile=profile,
+    )
+
+    assert result.stop_reason == "silence"
+    assert result.thinking_time_seconds == pytest.approx(2.0, abs=0.1)
+    assert result.answer_duration_seconds == pytest.approx(3.0, abs=0.1)
+    assert result.noise_rms == profile.noise_rms
+    assert result.threshold == profile.threshold
+    assert events[0] == (
+        "calibrated",
+        {"noise_rms": profile.noise_rms, "threshold": profile.threshold},
+    )
+
+
+def test_shared_profile_helper_matches_in_capture_calibration_for_same_frames():
+    """Shared calibration arithmetic produces identical captured profile values."""
+    settings = _settings(end_silence_seconds=0.6, no_speech_timeout_seconds=8.0)
+    calibration_frames = _sequence("silence", 33)
+    response_frames = (
+        _sequence("silence", 67)
+        + _sequence("speech", 100)
+        + _sequence("silence", 67)
+    )
+    profile = _build_noise_profile(calibration_frames, settings)
+
+    captured = capture_answer(
+        iter(calibration_frames + response_frames),
+        settings,
+    )
+
+    assert captured.noise_rms == profile.noise_rms
+    assert captured.threshold == profile.threshold
+
+
+def test_calibrate_microphone_consumes_calibration_frames_and_uses_shared_helper(
+    monkeypatch,
+):
+    """Microphone calibration reads the configured frames through shared math."""
+    settings = _settings(calibration_seconds=0.3)
+    frames = _sequence("silence", 10)
+    consumed = []
+
+    def generate():
+        for frame in frames:
+            consumed.append(frame)
+            yield frame
+
+    monkeypatch.setattr(
+        "src.speaksure.audio_capture.microphone_frames",
+        lambda device=None: generate(),
+    )
+
+    profile = calibrate_microphone(settings=settings, device=2)
+
+    expected = _build_noise_profile(consumed, settings)
+    assert len(consumed) == round(settings.calibration_seconds / FRAME_SECONDS)
+    assert profile == expected
 
 
 @pytest.mark.parametrize(
