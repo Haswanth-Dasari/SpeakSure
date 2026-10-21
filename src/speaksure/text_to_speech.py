@@ -15,7 +15,9 @@ from numpy.typing import NDArray
 
 from .configuration import (
     get_text_to_speech_length_scale,
+    get_text_to_speech_leading_silence_seconds,
     get_text_to_speech_models_dir,
+    get_text_to_speech_trailing_silence_seconds,
     get_text_to_speech_voice,
 )
 
@@ -69,15 +71,31 @@ class SpeechSynthesisConfig:
     voice_name: str
     models_dir: Path
     length_scale: float
+    leading_silence_seconds: float = 0.15
+    trailing_silence_seconds: float = 0.5
 
     def __post_init__(self) -> None:
-        """Validate voice identifiers, model paths, and speaking speed."""
+        """Validate voice identifiers, paths, speaking speed, and playback padding."""
         if not self.voice_name or Path(self.voice_name).name != self.voice_name:
             raise ValueError("TEXT_TO_SPEECH_VOICE must be a voice name, not a path.")
         if "\x00" in str(self.models_dir):
             raise ValueError("TEXT_TO_SPEECH_MODELS_DIR must be a valid directory path.")
         if not math.isfinite(self.length_scale) or not 0.5 <= self.length_scale <= 2.0:
             raise ValueError("TEXT_TO_SPEECH_LENGTH_SCALE must be from 0.5 to 2.0.")
+        if (
+            not math.isfinite(self.leading_silence_seconds)
+            or not 0 <= self.leading_silence_seconds <= 1
+        ):
+            raise ValueError(
+                "TEXT_TO_SPEECH_LEADING_SILENCE_SECONDS must be from 0 to 1."
+            )
+        if (
+            not math.isfinite(self.trailing_silence_seconds)
+            or not 0 <= self.trailing_silence_seconds <= 2
+        ):
+            raise ValueError(
+                "TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS must be from 0 to 2."
+            )
 
     @classmethod
     def from_env(cls) -> SpeechSynthesisConfig:
@@ -87,6 +105,8 @@ class SpeechSynthesisConfig:
             voice_name=voice_name,
             models_dir=Path(get_text_to_speech_models_dir()),
             length_scale=get_text_to_speech_length_scale(),
+            leading_silence_seconds=get_text_to_speech_leading_silence_seconds(),
+            trailing_silence_seconds=get_text_to_speech_trailing_silence_seconds(),
         )
 
 
@@ -277,12 +297,36 @@ def build_speech_synthesizer(config: SpeechSynthesisConfig) -> SpeechSynthesizer
     )
 
 
-def play_audio(audio: SynthesizedAudio, device: int | None = None) -> float:
-    """Play synthesized audio on the selected output device and wait for completion."""
+def play_audio(
+    audio: SynthesizedAudio,
+    device: int | None = None,
+    *,
+    leading_silence_seconds: float = 0.15,
+    trailing_silence_seconds: float = 0.5,
+) -> float:
+    """Play synthesized audio with silence padding and wait for completion."""
+    if not math.isfinite(leading_silence_seconds) or leading_silence_seconds < 0:
+        raise ValueError("leading_silence_seconds must be finite and non-negative.")
+    if not math.isfinite(trailing_silence_seconds) or trailing_silence_seconds < 0:
+        raise ValueError("trailing_silence_seconds must be finite and non-negative.")
+
     import sounddevice as sd
 
+    if leading_silence_seconds == 0 and trailing_silence_seconds == 0:
+        played_samples = audio.samples
+    else:
+        leading_samples = int(round(leading_silence_seconds * audio.sample_rate))
+        trailing_samples = int(round(trailing_silence_seconds * audio.sample_rate))
+        played_samples = np.concatenate(
+            (
+                np.zeros(leading_samples, dtype=audio.samples.dtype),
+                audio.samples,
+                np.zeros(trailing_samples, dtype=audio.samples.dtype),
+            )
+        )
+
     started_at = time.perf_counter()
-    sd.play(audio.samples, samplerate=audio.sample_rate, device=device)
+    sd.play(played_samples, samplerate=audio.sample_rate, device=device)
     sd.wait()
     return time.perf_counter() - started_at
 
@@ -294,7 +338,12 @@ def speak(
 ) -> tuple[float, float]:
     """Synthesize and play text, returning synthesis and playback wall-clock times."""
     audio = synthesizer.synthesize(text)
-    playback_seconds = play_audio(audio, device=device)
+    playback_seconds = play_audio(
+        audio,
+        device=device,
+        leading_silence_seconds=get_text_to_speech_leading_silence_seconds(),
+        trailing_silence_seconds=get_text_to_speech_trailing_silence_seconds(),
+    )
     return audio.synthesis_seconds, playback_seconds
 
 

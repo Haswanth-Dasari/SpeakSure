@@ -124,3 +124,35 @@ def get_text_to_speech_length_scale() -> float:
             "TEXT_TO_SPEECH_LENGTH_SCALE must be from 0.5 to 2.0."
         )
     return length_scale
+
+
+def get_text_to_speech_leading_silence_seconds() -> float:
+    """Return the validated Piper playback leading silence in seconds."""
+    value = os.environ.get("TEXT_TO_SPEECH_LEADING_SILENCE_SECONDS", "").strip() or "0.15"
+    try:
+        silence_seconds = float(value)
+    except ValueError as error:
+        raise ValueError(
+            "TEXT_TO_SPEECH_LEADING_SILENCE_SECONDS must be a number from 0 to 1."
+        ) from error
+    if not 0 <= silence_seconds <= 1:
+        raise ValueError(
+            "TEXT_TO_SPEECH_LEADING_SILENCE_SECONDS must be from 0 to 1."
+        )
+    return silence_seconds
+
+
+def get_text_to_speech_trailing_silence_seconds() -> float:
+    """Return the validated Piper playback trailing silence in seconds."""
+    value = os.environ.get("TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS", "").strip() or "0.5"
+    try:
+        silence_seconds = float(value)
+    except ValueError as error:
+        raise ValueError(
+            "TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS must be a number from 0 to 2."
+        ) from error
+    if not 0 <= silence_seconds <= 2:
+        raise ValueError(
+            "TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS must be from 0 to 2."
+        )
+    return silence_seconds

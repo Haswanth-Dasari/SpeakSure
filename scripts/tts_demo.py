@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument("--download", action="store_true")
     parser.add_argument("--voice")
     parser.add_argument("--length-scale", type=float)
+    parser.add_argument("--leading-silence", type=float)
+    parser.add_argument("--trailing-silence", type=float)
     parser.add_argument("--save", type=Path)
     parser.add_argument("--no-play", action="store_true")
     parser.add_argument("--list-output-devices", action="store_true")
@@ -49,7 +51,16 @@ def main() -> int:
             overrides["voice_name"] = args.voice
         if args.length_scale is not None:
             overrides["length_scale"] = args.length_scale
+        if args.leading_silence is not None:
+            overrides["leading_silence_seconds"] = args.leading_silence
+        if args.trailing_silence is not None:
+            overrides["trailing_silence_seconds"] = args.trailing_silence
         config = replace(config, **overrides)
+        print(
+            "Playback padding: "
+            f"{config.leading_silence_seconds:.3f}s leading, "
+            f"{config.trailing_silence_seconds:.3f}s trailing"
+        )
 
         if args.download:
             print(
@@ -71,10 +82,15 @@ def main() -> int:
 
         playback_seconds = 0.0
         if not args.no_play:
-            playback_seconds = play_audio(audio, device=args.device)
+            playback_seconds = play_audio(
+                audio,
+                device=args.device,
+                leading_silence_seconds=config.leading_silence_seconds,
+                trailing_silence_seconds=config.trailing_silence_seconds,
+            )
         print(f"Playback time: {playback_seconds:.3f} seconds")
         return 0
-    except SpeechSynthesisError as error:
+    except (SpeechSynthesisError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 1
 
