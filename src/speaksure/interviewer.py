@@ -23,6 +23,8 @@ from .question_bank import BankQuestion
 
 TurnKind = Literal["opening", "follow_up", "next_question", "repeat", "closing"]
 DecisionAction = Literal["follow_up", "next_question"]
+RECENT_EXCHANGES_LIMIT = 3
+EARLIER_ANSWER_WORD_LIMIT = 60
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,8 @@ class Interviewer:
         self._finished = False
         self._opened = False
         self._history: list[tuple[str, str]] = []
+        self._current_question_text = plan.questions[0].text
+        self._covered_topics: list[str] = []
 
     @property
     def is_finished(self) -> bool:
@@ -128,8 +132,8 @@ class Interviewer:
                 fallback_reason=None,
             )
 
-        self._history.append((current_question.id, answer))
         if self._question_index == len(self._plan.questions) - 1:
+            self._record_completed_exchange(answer)
             self._finished = True
             return InterviewerTurn(
                 utterance=CLOSING_TEXT,
@@ -143,6 +147,7 @@ class Interviewer:
 
         next_question = self._plan.questions[self._question_index + 1]
         messages = self._make_messages(current_question, answer, next_question)
+        self._record_completed_exchange(answer)
         result, decision, fallback_reason = self._get_decision(messages)
         if decision is None:
             return self._move_to_next_question(
@@ -170,6 +175,7 @@ class Interviewer:
             )
         if action == "follow_up":
             self._followups_used += 1
+            self._current_question_text = sanitized
             return InterviewerTurn(
                 utterance=sanitized,
                 kind="follow_up",
@@ -194,31 +200,27 @@ class Interviewer:
         next_question: BankQuestion,
     ) -> list[dict[str, str]]:
         """Create the protected system and turn-specific model messages."""
-        previous_topics = []
-        seen_topics: set[str] = set()
-        for question_id, _ in self._history[:-1]:
-            if question_id == question.id:
-                continue
-            previous = next(
-                item for item in self._plan.questions if item.id == question_id
+        earlier_exchanges = self._history[-RECENT_EXCHANGES_LIMIT:]
+        earlier_text = "none"
+        if earlier_exchanges:
+            earlier_text = "\n".join(
+                f"Q: {neutralize_markup(previous_question)} "
+                f"A: {_truncate_answer(neutralize_markup(previous_answer))}"
+                for previous_question, previous_answer in earlier_exchanges
             )
-            if previous.topic not in seen_topics:
-                previous_topics.append(previous.topic)
-                seen_topics.add(previous.topic)
-        if not previous_topics:
-            previous_topics = ["none"]
-        escaped_answer = answer.replace("<", "&lt;").replace(">", "&gt;")
+        topics = ", ".join(self._covered_topics) or "none"
         user_message = USER_TEMPLATE.format(
             role=self._plan.role,
             candidate_name=self._plan.candidate_name or "not provided",
-            current_question=question.text,
+            current_question=neutralize_markup(self._current_question_text),
             hints="; ".join(question.rubric_hints),
             followups_remaining=max(
                 0, self._plan.max_followups_per_question - self._followups_used
             ),
-            next_question=next_question.text,
-            topics_covered=", ".join(previous_topics),
-            candidate_answer=escaped_answer,
+            next_question=neutralize_markup(next_question.text),
+            topics_covered=topics,
+            earlier_exchanges=earlier_text,
+            candidate_answer=neutralize_markup(answer),
         )
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -268,6 +270,10 @@ class Interviewer:
         self._questions_asked += 1
         self._followups_used = 0
         self._repeat_used = False
+        self._current_question_text = sanitize_utterance(utterance or question.text)
+        current_topic = self._plan.questions[self._question_index - 1].topic
+        if current_topic not in self._covered_topics:
+            self._covered_topics.append(current_topic)
         spoken_text = sanitize_utterance(utterance or question.text)
         used_fallback = fallback_reason is not None
         return InterviewerTurn(
@@ -281,6 +287,24 @@ class Interviewer:
             used_fallback=used_fallback,
             fallback_reason=fallback_reason,
         )
+
+
+    def _record_completed_exchange(self, answer: str) -> None:
+        """Remember the exact question asked and the unmodified candidate answer."""
+        self._history.append((self._current_question_text, answer))
+
+
+def _truncate_answer(answer: str) -> str:
+    """Limit an earlier answer to sixty words and mark truncation visibly."""
+    words = answer.split()
+    if len(words) > EARLIER_ANSWER_WORD_LIMIT:
+        return f"{' '.join(words[:EARLIER_ANSWER_WORD_LIMIT])} ..."
+    return " ".join(words)
+
+
+def neutralize_markup(text: str) -> str:
+    """Replace angle brackets with spaces and collapse repeated whitespace."""
+    return " ".join(text.replace("<", " ").replace(">", " ").split())
 
 
 def _parse_decision(
