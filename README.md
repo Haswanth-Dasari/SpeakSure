@@ -66,3 +66,5 @@ python -m pytest -q
 ```
 
 Provider unit tests mock faster-whisper and the OpenAI SDK. They do not download model weights, make network calls, require real API credentials, or execute on a GPU. Browser microphone permission, actual model download/inference, and hardware device selection still need to be checked manually on the target machine.
+
+To try a typed-text HR mock interview with the configured Groq language model, run `python scripts/interviewer_demo.py --questions 3 --name Haswanth`. Use `--follow-ups`, `--role`, `--seed`, or `--no-save` to adjust the session; by default, completed and interrupted sessions are saved under `data/sessions`.
