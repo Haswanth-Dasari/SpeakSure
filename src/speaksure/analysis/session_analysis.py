@@ -8,18 +8,26 @@ from pathlib import Path
 
 from ..session_log import InterviewSession
 from .audio_delivery import analyze_audio_delivery
+from .content import analyze_content
 from .fluency import analyze_fluency
 from .transcript_quality import analyze_transcript_quality
+from ..llm_client import LLMClient
+from ..question_bank import HR_QUESTIONS
 
 
 def analyze_session(
-    session: InterviewSession, audio_root: Path = Path(".")
+    session: InterviewSession,
+    audio_root: Path = Path("."),
+    llm: LLMClient | None = None,
+    role: str = "software engineering fresher",
 ) -> InterviewSession:
     """Return a deep-copied session with per-turn analysis and a session summary."""
     analyzed = copy.deepcopy(session)
     fluencies = []
     transcript_qualities = []
     audio_deliveries = []
+    content_results = []
+    bank_by_id = {question.id: question for question in HR_QUESTIONS}
     for turn in analyzed.turns:
         fluency = analyze_fluency(turn.answer, turn.thinking_time_seconds)
         transcript_quality = analyze_transcript_quality(turn.answer)
@@ -29,6 +37,10 @@ def analyze_session(
         turn.analysis["fluency"] = fluency
         turn.analysis["transcript_quality"] = transcript_quality
         turn.analysis["audio_delivery"] = audio_delivery
+        if llm is not None:
+            content = analyze_content(turn, bank_by_id, role, llm)
+            turn.analysis["content"] = content
+            content_results.append(content)
         fluencies.append(fluency)
         transcript_qualities.append(transcript_quality)
         audio_deliveries.append(audio_delivery)
@@ -36,6 +48,13 @@ def analyze_session(
     wpm_by_turn = [metric["words_per_minute"] for metric in fluencies]
     pause_ratio_by_turn = [metric["pause_ratio"] for metric in fluencies]
     thinking_time_by_turn = [metric["thinking_time_seconds"] for metric in fluencies]
+    analysis_versions = {
+        "fluency": 1,
+        "transcript_quality": 1,
+        "audio_delivery": 1,
+    }
+    if llm is not None:
+        analysis_versions["content"] = 1
     summary = {
         "answered_turns": sum(bool(metric["has_answer"]) for metric in fluencies),
         "unanswered_turns": sum(not bool(metric["has_answer"]) for metric in fluencies),
@@ -56,11 +75,7 @@ def analyze_session(
         "wpm_by_turn": wpm_by_turn,
         "pause_ratio_by_turn": pause_ratio_by_turn,
         "thinking_time_by_turn": thinking_time_by_turn,
-        "analysis_versions": {
-            "fluency": 1,
-            "transcript_quality": 1,
-            "audio_delivery": 1,
-        },
+        "analysis_versions": analysis_versions,
     }
     analyzed.analysis["fluency_summary"] = summary
     pause_ratio_audio_by_turn = [
@@ -113,6 +128,43 @@ def analyze_session(
             )
         ],
     }
+    if llm is not None:
+        rated_content = [
+            result for result in content_results if result.get("rated") is True
+        ]
+        content_score_by_turn = [
+            result.get("content_score") if result.get("rated") is True else None
+            for result in content_results
+        ]
+        feedback_by_question_id: dict[str, dict[str, list[str]]] = {}
+        for result in rated_content:
+            question_id = str(result["question_id"])
+            feedback = feedback_by_question_id.setdefault(
+                question_id, {"strengths": [], "improvements": []}
+            )
+            feedback["strengths"].extend(result["strengths"])
+            feedback["improvements"].extend(result["improvements"])
+        analyzed.analysis["content_summary"] = {
+            "rated_turns": len(rated_content),
+            "unrated_turns": len(content_results) - len(rated_content),
+            "mean_content_score": _mean(
+                [result.get("content_score") for result in rated_content]
+            ),
+            "mean_relevance": _mean(
+                [result.get("relevance") for result in rated_content]
+            ),
+            "mean_specificity": _mean(
+                [result.get("specificity") for result in rated_content]
+            ),
+            "mean_clarity": _mean(
+                [result.get("clarity") for result in rated_content]
+            ),
+            "mean_coverage_ratio": _mean(
+                [result.get("coverage_ratio") for result in rated_content]
+            ),
+            "content_score_by_turn": content_score_by_turn,
+            "feedback_by_question_id": feedback_by_question_id,
+        }
     return analyzed
 
 

@@ -8,6 +8,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from speaksure.analysis.session_analysis import analyze_session  # noqa: E402
+from speaksure.llm_client import (  # noqa: E402
+    GroqAnalysisLLMConfig,
+    LLMError,
+    build_analysis_llm_client,
+)
 from speaksure.session_log import InterviewSession, SessionFormatError  # noqa: E402
 
 
@@ -17,23 +22,50 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("session", type=Path)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--audio-root", type=Path, default=Path("."))
+    parser.add_argument("--content", action="store_true")
+    parser.add_argument("--role", default="software engineering fresher")
     args = parser.parse_args(argv)
 
     try:
         source = args.session
         session = InterviewSession.load(source)
-        analyzed = analyze_session(session, audio_root=args.audio_root)
+        llm = None
+        if args.content:
+            analysis_config = GroqAnalysisLLMConfig.from_env()
+            if not analysis_config.api_key:
+                raise ValueError(
+                    "Content analysis requires GROQ_API_KEY in the project-root .env file."
+                )
+            if not analysis_config.model.strip():
+                raise ValueError("Content analysis model is not configured.")
+            llm = build_analysis_llm_client(analysis_config)
+        analyzed = analyze_session(
+            session,
+            audio_root=args.audio_root,
+            llm=llm,
+            role=args.role,
+        )
+        if args.content and any(
+            turn.analysis.get("content", {}).get("error") == "llm_error"
+            for turn in analyzed.turns
+        ):
+            raise LLMError(
+                "Content analysis could not use the configured model. "
+                "Check GROQ_API_KEY, LLM_ANALYSIS_MODEL, and network access."
+            )
         output_path = args.out or (
             Path("data/analysis") / f"{source.stem}.analyzed.json"
         )
         if output_path.resolve() == source.resolve():
             raise ValueError("Output path must not overwrite the source session.")
         saved_path = analyzed.save_to(output_path)
-    except (OSError, SessionFormatError, ValueError) as error:
+    except (OSError, SessionFormatError, ValueError, LLMError) as error:
         print(f"Could not analyze session: {error}", file=sys.stderr)
         return 1
 
     _print_report(analyzed)
+    if args.content:
+        _print_content_report(analyzed)
     print(f"Analysis saved: {saved_path}")
     return 0
 
@@ -124,6 +156,59 @@ def _display(value: object) -> str:
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
+
+
+def _print_content_report(session: InterviewSession) -> None:
+    """Print content scores and specific model feedback for rated turns."""
+    print("Content analysis")
+    print(
+        "turn question_id relevance specificity clarity coverage "
+        "content_score"
+    )
+    for turn in session.turns:
+        content = turn.analysis.get("content", {})
+        if content.get("rated") is not True:
+            interviewer = turn.analysis.get("interviewer", {})
+            question_id = (
+                interviewer.get("question_id")
+                if isinstance(interviewer, dict)
+                else None
+            )
+            print(
+                f"{turn.index} {_display(content.get('question_id') or question_id)} "
+                f"- - - - -"
+            )
+            continue
+        coverage = content.get("coverage", [])
+        verified_count = sum(
+            bool(entry.get("evidence_verified")) for entry in coverage
+        )
+        print(
+            " ".join(
+                _display(value)
+                for value in (
+                    turn.index,
+                    content.get("question_id"),
+                    content.get("relevance"),
+                    content.get("specificity"),
+                    content.get("clarity"),
+                    f"{verified_count}/{len(coverage)}",
+                    content.get("content_score"),
+                )
+            )
+        )
+        print(f"  strengths: {'; '.join(content['strengths']) or '-'}")
+        print(f"  improvements: {'; '.join(content['improvements']) or '-'}")
+        failed_evidence = [
+            entry
+            for entry in coverage
+            if entry.get("covered") and not entry.get("evidence_verified")
+        ]
+        for entry in failed_evidence:
+            print(
+                "  unverified evidence: "
+                f"{entry['hint']} -> {entry['evidence'] or '(empty quote)'}"
+            )
 
 
 if __name__ == "__main__":

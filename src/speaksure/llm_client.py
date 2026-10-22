@@ -18,6 +18,8 @@ from openai import (
 
 from .configuration import (
     get_groq_api_key,
+    get_llm_analysis_model,
+    get_llm_analysis_reasoning_effort,
     get_llm_model,
     get_llm_reasoning_effort,
     get_llm_timeout_seconds,
@@ -90,6 +92,35 @@ class GroqLLMConfig:
             api_key=get_groq_api_key(),
             model=get_llm_model(),
             reasoning_effort=get_llm_reasoning_effort(),
+            timeout_seconds=get_llm_timeout_seconds(),
+        )
+
+
+@dataclass(frozen=True)
+class GroqAnalysisLLMConfig:
+    """Validated credentials and dedicated settings for content-analysis calls."""
+
+    api_key: str
+    model: str
+    reasoning_effort: str
+    timeout_seconds: int
+
+    def __post_init__(self) -> None:
+        """Validate analysis-specific reasoning effort and shared timeout."""
+        if self.reasoning_effort not in {"", "low", "medium", "high"}:
+            raise ValueError(
+                "LLM_ANALYSIS_REASONING_EFFORT must be one of: '', 'low', 'medium', or 'high'."
+            )
+        if not 1 <= self.timeout_seconds <= 120:
+            raise ValueError("LLM_TIMEOUT_SECONDS must be from 1 to 120.")
+
+    @classmethod
+    def from_env(cls) -> GroqAnalysisLLMConfig:
+        """Read the shared Groq key and timeout with analysis-specific settings."""
+        return cls(
+            api_key=get_groq_api_key(),
+            model=get_llm_analysis_model(),
+            reasoning_effort=get_llm_analysis_reasoning_effort(),
             timeout_seconds=get_llm_timeout_seconds(),
         )
 
@@ -286,6 +317,16 @@ class GroqChatClient:
 
 def build_llm_client(config: GroqLLMConfig) -> LLMClient:
     """Build the Groq LLM client from validated configuration values."""
+    return GroqChatClient(
+        api_key=config.api_key,
+        model=config.model,
+        reasoning_effort=config.reasoning_effort,
+        timeout_seconds=config.timeout_seconds,
+    )
+
+
+def build_analysis_llm_client(config: GroqAnalysisLLMConfig) -> LLMClient:
+    """Build a Groq client using dedicated offline analysis settings."""
     return GroqChatClient(
         api_key=config.api_key,
         model=config.model,

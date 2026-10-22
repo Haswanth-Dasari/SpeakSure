@@ -57,6 +57,26 @@ def get_llm_timeout_seconds() -> int:
     return timeout_seconds
 
 
+def get_llm_analysis_model() -> str:
+    """Return the configured offline analysis model or its default."""
+    return (
+        os.environ.get("LLM_ANALYSIS_MODEL", "").strip()
+        or "openai/gpt-oss-120b"
+    )
+
+
+def get_llm_analysis_reasoning_effort() -> str:
+    """Return the validated reasoning effort for offline content analysis."""
+    value = os.environ.get(
+        "LLM_ANALYSIS_REASONING_EFFORT", "medium"
+    ).strip().lower()
+    if value not in {"", "low", "medium", "high"}:
+        raise ValueError(
+            "LLM_ANALYSIS_REASONING_EFFORT must be one of: '', 'low', 'medium', or 'high'."
+        )
+    return value
+
+
 def get_chat_model() -> str:
     """Return the configured chat model or its default."""
     return os.environ.get("OPENAI_MODEL", "").strip() or "gpt-4o-mini"
