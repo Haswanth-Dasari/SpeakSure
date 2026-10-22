@@ -1,18 +1,20 @@
-"""Combine transcript-only analyzers into a copied interview session."""
+"""Combine transcript, audio, and optional question-level content analyzers."""
 
 from __future__ import annotations
 
 import copy
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
-from ..session_log import InterviewSession
-from .audio_delivery import analyze_audio_delivery
-from .content import analyze_content
-from .fluency import analyze_fluency
-from .transcript_quality import analyze_transcript_quality
 from ..llm_client import LLMClient
 from ..question_bank import HR_QUESTIONS
+from ..session_log import InterviewSession, Turn
+from .audio_delivery import analyze_audio_delivery
+from .content import ASR_HIGH, ASR_LOW, analyze_content
+from .fluency import analyze_fluency
+from .question_labels import resolve_asked_questions
+from .transcript_quality import analyze_transcript_quality
 
 
 def analyze_session(
@@ -21,13 +23,11 @@ def analyze_session(
     llm: LLMClient | None = None,
     role: str = "software engineering fresher",
 ) -> InterviewSession:
-    """Return a deep-copied session with per-turn analysis and a session summary."""
+    """Return a deep-copied session with transcript, audio, and optional content analysis."""
     analyzed = copy.deepcopy(session)
     fluencies = []
     transcript_qualities = []
     audio_deliveries = []
-    content_results = []
-    bank_by_id = {question.id: question for question in HR_QUESTIONS}
     for turn in analyzed.turns:
         fluency = analyze_fluency(turn.answer, turn.thinking_time_seconds)
         transcript_quality = analyze_transcript_quality(turn.answer)
@@ -37,10 +37,6 @@ def analyze_session(
         turn.analysis["fluency"] = fluency
         turn.analysis["transcript_quality"] = transcript_quality
         turn.analysis["audio_delivery"] = audio_delivery
-        if llm is not None:
-            content = analyze_content(turn, bank_by_id, role, llm)
-            turn.analysis["content"] = content
-            content_results.append(content)
         fluencies.append(fluency)
         transcript_qualities.append(transcript_quality)
         audio_deliveries.append(audio_delivery)
@@ -54,8 +50,8 @@ def analyze_session(
         "audio_delivery": 1,
     }
     if llm is not None:
-        analysis_versions["content"] = 1
-    summary = {
+        analysis_versions["content"] = 2
+    analyzed.analysis["fluency_summary"] = {
         "answered_turns": sum(bool(metric["has_answer"]) for metric in fluencies),
         "unanswered_turns": sum(not bool(metric["has_answer"]) for metric in fluencies),
         "mean_words_per_minute": _mean(wpm_by_turn),
@@ -67,17 +63,14 @@ def analyze_session(
         ),
         "mean_thinking_time_seconds": _mean(thinking_time_by_turn),
         "mean_transcript_probability": _mean(
-            [
-                metric["mean_word_probability"]
-                for metric in transcript_qualities
-            ]
+            [metric["mean_word_probability"] for metric in transcript_qualities]
         ),
         "wpm_by_turn": wpm_by_turn,
         "pause_ratio_by_turn": pause_ratio_by_turn,
         "thinking_time_by_turn": thinking_time_by_turn,
         "analysis_versions": analysis_versions,
     }
-    analyzed.analysis["fluency_summary"] = summary
+
     pause_ratio_audio_by_turn = [
         delivery["pause_ratio"] if delivery["has_audio"] else None
         for delivery in audio_deliveries
@@ -128,44 +121,138 @@ def analyze_session(
             )
         ],
     }
+
     if llm is not None:
-        rated_content = [
-            result for result in content_results if result.get("rated") is True
-        ]
-        content_score_by_turn = [
-            result.get("content_score") if result.get("rated") is True else None
-            for result in content_results
-        ]
-        feedback_by_question_id: dict[str, dict[str, list[str]]] = {}
-        for result in rated_content:
-            question_id = str(result["question_id"])
-            feedback = feedback_by_question_id.setdefault(
-                question_id, {"strengths": [], "improvements": []}
-            )
-            feedback["strengths"].extend(result["strengths"])
-            feedback["improvements"].extend(result["improvements"])
-        analyzed.analysis["content_summary"] = {
-            "rated_turns": len(rated_content),
-            "unrated_turns": len(content_results) - len(rated_content),
-            "mean_content_score": _mean(
-                [result.get("content_score") for result in rated_content]
-            ),
-            "mean_relevance": _mean(
-                [result.get("relevance") for result in rated_content]
-            ),
-            "mean_specificity": _mean(
-                [result.get("specificity") for result in rated_content]
-            ),
-            "mean_clarity": _mean(
-                [result.get("clarity") for result in rated_content]
-            ),
-            "mean_coverage_ratio": _mean(
-                [result.get("coverage_ratio") for result in rated_content]
-            ),
-            "content_score_by_turn": content_score_by_turn,
-            "feedback_by_question_id": feedback_by_question_id,
-        }
+        _analyze_content_groups(
+            analyzed,
+            transcript_qualities,
+            llm,
+            role,
+        )
     return analyzed
+
+
+def _analyze_content_groups(
+    session: InterviewSession,
+    transcript_qualities: list[dict[str, object]],
+    llm: LLMClient,
+    role: str,
+) -> None:
+    """Analyze consecutive question groups, attach references, and summarize scores."""
+    bank_by_id = {question.id: question for question in HR_QUESTIONS}
+    labels = resolve_asked_questions(session, bank_by_id)
+    groups: list[tuple[list[int], str | None, str]] = []
+    for turn_index, label in enumerate(labels):
+        main_question_id = label["main_question_id"]
+        question_id = main_question_id if isinstance(main_question_id, str) else None
+        source = str(label["source"])
+        if groups and groups[-1][1] == question_id:
+            groups[-1][0].append(turn_index)
+        else:
+            groups.append(([turn_index], question_id, source))
+
+    content_by_question: list[dict[str, Any]] = []
+    for group_index, (turn_indexes, question_id, source) in enumerate(groups, start=1):
+        turns = [session.turns[index] for index in turn_indexes]
+        asr_mean = _group_asr_mean(turn_indexes, session.turns, transcript_qualities)
+        asr_reliability = asr_reliability_for(asr_mean)
+        content = analyze_content(
+            turns,
+            question_id,
+            bank_by_id,
+            role,
+            llm,
+            asr_mean_probability=asr_mean,
+            asr_reliability=asr_reliability,
+        )
+        if question_id is None or content.get("error") == "unknown_question":
+            content["reason"] = "unknown_question"
+            content.pop("error", None)
+        group_result: dict[str, Any] = {
+            "main_question_id": question_id,
+            "turn_indexes": [session.turns[index].index for index in turn_indexes],
+            "label_source": source,
+            "rated": content.get("rated") is True,
+            "asr_mean_probability": asr_mean,
+            "asr_reliability": asr_reliability,
+            **content,
+        }
+        content_by_question.append(group_result)
+        for turn_index in turn_indexes:
+            turn = session.turns[turn_index]
+            turn.analysis.pop("content", None)
+            turn.analysis["content_ref"] = {
+                "main_question_id": question_id,
+                "group_index": group_index,
+            }
+
+    rated = [result for result in content_by_question if result["rated"]]
+    content_score_by_question = [
+        result.get("content_score") if result["rated"] else None
+        for result in content_by_question
+    ]
+    feedback_by_question_id: dict[str, dict[str, list[str]]] = {}
+    for result in rated:
+        question_id = str(result["main_question_id"])
+        feedback = feedback_by_question_id.setdefault(
+            question_id, {"strengths": [], "improvements": []}
+        )
+        feedback["strengths"].extend(result["strengths"])
+        feedback["improvements"].extend(result["improvements"])
+
+    source_counts = {"recorded": 0, "inferred": 0, "unknown": 0}
+    for label in labels:
+        source = str(label["source"])
+        source_counts[source] = source_counts.get(source, 0) + 1
+    session.analysis["content_by_question"] = content_by_question
+    session.analysis["content_summary"] = {
+        "rated_questions": len(rated),
+        "unrated_questions": len(content_by_question) - len(rated),
+        "mean_content_score": _mean(
+            [result.get("content_score") for result in rated]
+        ),
+        "mean_relevance": _mean([result.get("relevance") for result in rated]),
+        "mean_specificity": _mean([result.get("specificity") for result in rated]),
+        "mean_clarity": _mean([result.get("clarity") for result in rated]),
+        "mean_coverage_ratio": _mean(
+            [result.get("coverage_ratio") for result in rated]
+        ),
+        "content_score_by_question": content_score_by_question,
+        "feedback_by_question_id": feedback_by_question_id,
+        "label_sources": source_counts,
+    }
+
+
+def _group_asr_mean(
+    turn_indexes: list[int],
+    turns: list[Turn],
+    transcript_qualities: list[dict[str, object]],
+) -> float | None:
+    """Compute word-count-weighted mean ASR confidence for available timed words."""
+    weighted_total = 0.0
+    total_words = 0
+    for index in turn_indexes:
+        quality = transcript_qualities[index]
+        answer = turns[index].answer
+        if not quality["has_timed_words"] or answer is None:
+            continue
+        probability = quality["mean_word_probability"]
+        word_count = len(answer.words)
+        if isinstance(probability, (int, float)) and word_count > 0:
+            weighted_total += float(probability) * word_count
+            total_words += word_count
+    return weighted_total / total_words if total_words else None
+
+
+def asr_reliability_for(probability: float | None) -> str:
+    """Assign confidence to the named low, medium, high, or unknown band."""
+    if probability is None:
+        return "unknown"
+    if probability < ASR_LOW:
+        return "low"
+    if probability >= ASR_HIGH:
+        return "high"
+    return "medium"
 
 
 def _mean(values: Iterable[object]) -> float | None:
@@ -173,7 +260,6 @@ def _mean(values: Iterable[object]) -> float | None:
     available = [
         float(value)
         for value in values
-        if isinstance(value, (int, float))
-        and not isinstance(value, bool)
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
     ]
     return sum(available) / len(available) if available else None

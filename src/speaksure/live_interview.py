@@ -112,6 +112,8 @@ class LiveInterviewRunner:
             self._output(f"Interviewer: {opening.utterance}")
             self._speak_or_report(opening.utterance)
             current_question = self._interviewer.plan.questions[0].text
+            current_question_id: str | None = self._interviewer.plan.questions[0].id
+            current_is_follow_up = False
             empty_attempts = 0
 
             while not self._interviewer.is_finished:
@@ -200,6 +202,10 @@ class LiveInterviewRunner:
                         "fallback_reason": reply.fallback_reason,
                         "llm_latency_seconds": reply.llm_latency_seconds,
                     },
+                    "asked": {
+                        "main_question_id": current_question_id,
+                        "is_follow_up": current_is_follow_up,
+                    },
                     "empty_attempts": empty_attempts,
                     "low_confidence_words": low_confidence_words,
                 }
@@ -230,8 +236,13 @@ class LiveInterviewRunner:
                     stt_seconds + (llm_seconds or 0.0) + tts_seconds
                 )
                 self._save_session()
-                if reply.kind != "closing":
+                if reply.kind == "follow_up":
                     current_question = reply.utterance
+                    current_is_follow_up = True
+                elif reply.kind == "next_question":
+                    current_question = reply.utterance
+                    current_question_id = reply.question_id
+                    current_is_follow_up = False
                 empty_attempts = 0
         except KeyboardInterrupt:
             self._save_session()

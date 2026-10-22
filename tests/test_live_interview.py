@@ -246,6 +246,43 @@ def test_three_question_run_speaks_in_order_saves_each_turn_and_stops_at_closing
     assert session.turns[2].analysis["timing"]["llm_seconds"] is None
 
 
+def test_runner_records_asked_main_question_and_followup_flags(tmp_path: Path) -> None:
+    """Each logged answer stores the question id and follow-up status it was asked under."""
+    questions = select_questions(3, seed=0)
+    interviewer = FakeInterviewer(
+        [
+            reply("follow_up", "Tell me more about your background.", question_id=questions[0].id),
+            reply("next_question", questions[1].text, question_id=questions[1].id),
+            reply("follow_up", "Give a specific example.", question_id=questions[1].id),
+            reply("next_question", questions[2].text, question_id=questions[2].id),
+            reply("closing", "Thank you.", question_id=questions[2].id, latency=None),
+        ]
+    )
+    session = make_session()
+    answers = deque(transcript(f"Candidate answer number {index}.") for index in range(5))
+    runner = LiveInterviewRunner(
+        interviewer=interviewer,  # type: ignore[arg-type]
+        session=session,
+        settings=LiveSettings(sessions_dir=tmp_path, save_audio=False),
+        listen=lambda: captured(),
+        transcribe=lambda _capture: answers.popleft(),
+        speak=lambda _text: SpokenTiming(0.1, 0.2),
+        output=lambda _text: None,
+        sleep=lambda _seconds: None,
+        clock=FakeClock(),
+    )
+
+    runner.run()
+
+    assert [turn.analysis["asked"] for turn in session.turns] == [
+        {"main_question_id": questions[0].id, "is_follow_up": False},
+        {"main_question_id": questions[0].id, "is_follow_up": True},
+        {"main_question_id": questions[1].id, "is_follow_up": False},
+        {"main_question_id": questions[1].id, "is_follow_up": True},
+        {"main_question_id": questions[2].id, "is_follow_up": False},
+    ]
+
+
 def test_no_speech_repeats_without_recording_a_turn_until_retry(tmp_path: Path) -> None:
     """A no-speech attempt triggers repeat and is omitted from session turns."""
     interviewer = FakeInterviewer(

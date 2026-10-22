@@ -54,7 +54,15 @@ def main() -> int:
     parser.add_argument("--seed", type=int)
     parser.add_argument("--input-device", type=int)
     parser.add_argument("--output-device", type=int)
-    parser.add_argument("--end-silence", type=float, default=1.5)
+    parser.add_argument(
+        "--end-silence",
+        type=float,
+        default=2.5,
+        help=(
+            "Silence duration before ending an answer (default: 2.5 seconds; "
+            "gives candidates time to think during pauses)."
+        ),
+    )
     parser.add_argument("--settle-seconds", type=float, default=0.4)
     parser.add_argument("--no-save-audio", action="store_true")
     parser.add_argument("--no-warmup", action="store_true")

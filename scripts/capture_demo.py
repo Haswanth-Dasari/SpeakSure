@@ -26,7 +26,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list-devices", action="store_true")
     parser.add_argument("--device", type=int)
-    parser.add_argument("--end-silence", type=float, default=1.5)
+    parser.add_argument(
+        "--end-silence",
+        type=float,
+        default=2.5,
+        help=(
+            "Silence duration before ending an answer (default: 2.5 seconds; "
+            "gives candidates time to think during pauses)."
+        ),
+    )
     parser.add_argument("--no-speech-timeout", type=float, default=20.0)
     parser.add_argument("--max-seconds", type=float, default=120.0)
     parser.add_argument("--no-transcribe", action="store_true")

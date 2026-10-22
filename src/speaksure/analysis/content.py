@@ -29,8 +29,8 @@ WEIGHTS = {
 }
 # Credit given to a covered hint whose model quote cannot be verified verbatim.
 UNVERIFIED_EVIDENCE_CREDIT = 0.5
-# Version for this content-analysis output shape.
-CONTENT_ANALYZER_VERSION = 1
+# Version for this per-question content-analysis output shape.
+CONTENT_ANALYZER_VERSION = 2
 # Deterministic sampling temperature used for rubric evaluation.
 CONTENT_TEMPERATURE = 0.0
 # Maximum output tokens for the first JSON-mode content-analysis attempt.
@@ -39,7 +39,13 @@ CONTENT_MAX_TOKENS = 1500
 CONTENT_RETRIES = 1
 # Number of words allowed in each evidence quotation.
 MAX_EVIDENCE_WORDS = 15
+# ASR confidence below this value is considered low.
+ASR_LOW = 0.6
+# ASR confidence at or above this value is considered high.
+ASR_HIGH = 0.8
+# Exact STAR fields required for behavioral-question output.
 _STAR_KEYS = ("situation", "task", "action", "result")
+# Exact top-level fields accepted in a model response.
 _RESULT_KEYS = {
     "relevance",
     "specificity",
@@ -187,17 +193,17 @@ def score_content(parsed: dict[str, Any], answer_text: str) -> dict[str, Any]:
 
 
 def analyze_content(
-    turn: Turn,
+    turns: Sequence[Turn],
+    main_question_id: str | None,
     bank_by_id: Mapping[str, BankQuestion],
     role: str,
     llm: LLMClient,
+    *,
+    asr_mean_probability: float | None,
+    asr_reliability: str,
 ) -> dict[str, Any]:
-    """Rate a turn against its planned question hints without exposing LLM errors."""
-    interviewer = turn.analysis.get("interviewer", {})
-    question_id = (
-        interviewer.get("question_id") if isinstance(interviewer, dict) else None
-    )
-    question = bank_by_id.get(question_id) if isinstance(question_id, str) else None
+    """Rate a consecutive main-question exchange with its question-bank rubric."""
+    question = bank_by_id.get(main_question_id) if main_question_id else None
     if question is None:
         return {
             "analyzer_version": CONTENT_ANALYZER_VERSION,
@@ -205,7 +211,11 @@ def analyze_content(
             "error": "unknown_question",
         }
 
-    answer_text = _answer_text(turn.answer)
+    pairs = [
+        (turn.question, _answer_text(turn.answer))
+        for turn in turns
+    ]
+    answer_text = " ".join(answer for _, answer in pairs).strip()
     if len(_normalized_tokens(answer_text)) < MIN_WORDS_TO_RATE:
         return {
             "analyzer_version": CONTENT_ANALYZER_VERSION,
@@ -214,16 +224,26 @@ def analyze_content(
         }
 
     behavioural = question.id in BEHAVIOURAL_QUESTION_IDS
-    prompt_answer = neutralize_markup(answer_text)
     numbered_hints = "\n".join(
         f"{index}. {hint}" for index, hint in enumerate(question.rubric_hints, 1)
     )
+    exchange = "\n\n".join(
+        f"Pair {index}:\nQuestion asked: {neutralize_markup(question_text)}\n"
+        f"<candidate_answer>{neutralize_markup(answer)}</candidate_answer>"
+        for index, (question_text, answer) in enumerate(pairs, 1)
+    )
     user_message = CONTENT_USER_TEMPLATE.format(
         role=neutralize_markup(role),
-        question=neutralize_markup(turn.question),
+        main_question=neutralize_markup(question.text),
         hints=numbered_hints,
         behavioural=str(behavioural).lower(),
-        answer=prompt_answer,
+        asr_mean_probability=(
+            "unknown"
+            if asr_mean_probability is None
+            else f"{asr_mean_probability:.3f}"
+        ),
+        asr_reliability=asr_reliability.upper(),
+        exchange=exchange,
     )
     messages = [
         {"role": "system", "content": CONTENT_SYSTEM_PROMPT},

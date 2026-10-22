@@ -46,8 +46,8 @@ def main(argv: list[str] | None = None) -> int:
             role=args.role,
         )
         if args.content and any(
-            turn.analysis.get("content", {}).get("error") == "llm_error"
-            for turn in analyzed.turns
+            group.get("error") == "llm_error"
+            for group in analyzed.analysis.get("content_by_question", [])
         ):
             raise LLMError(
                 "Content analysis could not use the configured model. "
@@ -159,24 +159,20 @@ def _display(value: object) -> str:
 
 
 def _print_content_report(session: InterviewSession) -> None:
-    """Print content scores and specific model feedback for rated turns."""
+    """Print question-group scores, feedback, evidence, and label-source counts."""
     print("Content analysis")
     print(
-        "turn question_id relevance specificity clarity coverage "
-        "content_score"
+        "question_id turns relevance specificity clarity coverage "
+        "content_score asr_reliability"
     )
-    for turn in session.turns:
-        content = turn.analysis.get("content", {})
+    groups = session.analysis.get("content_by_question", [])
+    for content in groups:
+        turn_indexes = content.get("turn_indexes", [])
+        turns_text = "+".join(str(index) for index in turn_indexes) or "-"
         if content.get("rated") is not True:
-            interviewer = turn.analysis.get("interviewer", {})
-            question_id = (
-                interviewer.get("question_id")
-                if isinstance(interviewer, dict)
-                else None
-            )
             print(
-                f"{turn.index} {_display(content.get('question_id') or question_id)} "
-                f"- - - - -"
+                f"{_display(content.get('main_question_id'))} {turns_text} "
+                f"- - - - - {_display(content.get('asr_reliability'))}"
             )
             continue
         coverage = content.get("coverage", [])
@@ -187,13 +183,14 @@ def _print_content_report(session: InterviewSession) -> None:
             " ".join(
                 _display(value)
                 for value in (
-                    turn.index,
-                    content.get("question_id"),
+                    content.get("main_question_id"),
+                    turns_text,
                     content.get("relevance"),
                     content.get("specificity"),
                     content.get("clarity"),
                     f"{verified_count}/{len(coverage)}",
                     content.get("content_score"),
+                    content.get("asr_reliability"),
                 )
             )
         )
@@ -209,6 +206,23 @@ def _print_content_report(session: InterviewSession) -> None:
                 "  unverified evidence: "
                 f"{entry['hint']} -> {entry['evidence'] or '(empty quote)'}"
             )
+    label_sources = session.analysis.get("content_summary", {}).get(
+        "label_sources", {}
+    )
+    ordered_sources = sorted(
+        ("recorded", "inferred", "unknown"),
+        key=lambda source: (
+            label_sources.get(source, 0) == 0,
+            -label_sources.get(source, 0),
+        ),
+    )
+    print(
+        "labels: "
+        + ", ".join(
+            f"{label_sources.get(source, 0)} {source}"
+            for source in ordered_sources
+        )
+    )
 
 
 if __name__ == "__main__":
