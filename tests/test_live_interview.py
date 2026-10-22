@@ -70,7 +70,7 @@ class FakeInterviewer:
 
     def __init__(self, replies: list[InterviewerTurn], question_count: int = 3):
         """Set the interview plan and ordered replies for the runner."""
-        self._plan = SimpleNamespace(
+        self.plan = SimpleNamespace(
             questions=select_questions(question_count, seed=0)
         )
         self.replies = deque(replies)
@@ -87,7 +87,7 @@ class FakeInterviewer:
         return InterviewerTurn(
             utterance="Welcome. Tell me about yourself.",
             kind="opening",
-            question_id=self._plan.questions[0].id,
+            question_id=self.plan.questions[0].id,
             rationale="Opening",
             llm_latency_seconds=None,
             used_fallback=False,

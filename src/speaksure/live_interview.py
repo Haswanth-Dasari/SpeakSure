@@ -111,7 +111,7 @@ class LiveInterviewRunner:
             opening = self._interviewer.opening()
             self._output(f"Interviewer: {opening.utterance}")
             self._speak_or_report(opening.utterance)
-            current_question = self._interviewer._plan.questions[0].text
+            current_question = self._interviewer.plan.questions[0].text
             empty_attempts = 0
 
             while not self._interviewer.is_finished:

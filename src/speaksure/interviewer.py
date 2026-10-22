@@ -14,6 +14,7 @@ from .interviewer_prompts import (
     FALLBACK_ACK,
     OPENING_TEMPLATE,
     OPENING_TEMPLATE_NAMELESS,
+    NO_ANSWER_ACK,
     REPEAT_REQUEST,
     SYSTEM_PROMPT,
     USER_TEMPLATE,
@@ -88,6 +89,11 @@ class Interviewer:
         """Return the number of distinct planned questions already presented."""
         return self._questions_asked
 
+    @property
+    def plan(self) -> InterviewPlan:
+        """Return the immutable interview plan."""
+        return self._plan
+
     def opening(self) -> InterviewerTurn:
         """Return the scripted greeting and first question without calling the LLM."""
         if self._opened:
@@ -129,6 +135,29 @@ class Interviewer:
                 rationale="The candidate response was empty.",
                 llm_latency_seconds=None,
                 used_fallback=False,
+                fallback_reason=None,
+            )
+
+        if not answer and self._repeat_used:
+            if self._question_index == len(self._plan.questions) - 1:
+                self._record_completed_exchange(answer)
+                self._finished = True
+                return InterviewerTurn(
+                    utterance=CLOSING_TEXT,
+                    kind="closing",
+                    question_id=current_question.id,
+                    rationale="no answer after repeat",
+                    llm_latency_seconds=None,
+                    used_fallback=False,
+                    fallback_reason=None,
+                )
+            next_question = self._plan.questions[self._question_index + 1]
+            self._record_completed_exchange(answer)
+            return self._move_to_next_question(
+                next_question,
+                utterance=f"{NO_ANSWER_ACK} {next_question.text}",
+                rationale="no answer after repeat",
+                latency=None,
                 fallback_reason=None,
             )
 

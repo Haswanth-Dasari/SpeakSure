@@ -16,6 +16,7 @@ from src.speaksure.interviewer import (
 )
 from src.speaksure.interviewer_prompts import (
     CLOSING_TEXT,
+    NO_ANSWER_ACK,
     REPEAT_REQUEST,
     SYSTEM_PROMPT,
 )
@@ -98,6 +99,13 @@ def test_plan_requires_questions_and_valid_followup_limit() -> None:
         InterviewPlan(questions=())
     with pytest.raises(ValueError):
         InterviewPlan(questions=HR_QUESTIONS[:1], max_followups_per_question=3)
+
+
+def test_public_plan_property_returns_the_interview_plan() -> None:
+    """The plan is available through a public read-only property."""
+    interviewer, _, plan = make_interviewer()
+
+    assert interviewer.plan is plan
 
 
 def test_opening_is_scripted_and_includes_candidate_name_and_first_question() -> None:
@@ -221,19 +229,52 @@ def test_empty_response_error_doubles_retry_token_budget() -> None:
     assert [call["max_tokens"] for call in llm.calls] == [500, 1000]
 
 
-def test_empty_answer_repeats_without_llm_then_second_empty_continues() -> None:
-    """One silence triggers a repeat; another is passed to the model."""
+def test_empty_answer_after_repeat_moves_on_without_calling_llm() -> None:
+    """A second empty answer moves on with a neutral acknowledgement."""
+    interviewer, llm, plan = make_interviewer()
+    interviewer.opening()
+
+    repeat = interviewer.next_turn("  ")
+    moved_on = interviewer.next_turn("")
+
+    assert repeat.kind == "repeat"
+    assert repeat.utterance == REPEAT_REQUEST
+    assert moved_on.kind == "next_question"
+    assert moved_on.utterance == f"{NO_ANSWER_ACK} {plan.questions[1].text}"
+    assert moved_on.rationale == "no answer after repeat"
+    assert moved_on.used_fallback is False
+    assert moved_on.llm_latency_seconds is None
+    assert len(llm.calls) == 0
+
+
+def test_empty_answer_after_repeat_on_last_question_closes_without_llm() -> None:
+    """A repeated silence on the final question closes without an LLM request."""
+    interviewer, llm, plan = make_interviewer(count=1)
+    interviewer.opening()
+
+    first_empty = interviewer.next_turn("")
+    closing = interviewer.next_turn("")
+
+    assert first_empty.kind == "repeat"
+    assert closing.kind == "closing"
+    assert closing.utterance == CLOSING_TEXT
+    assert closing.question_id == plan.questions[0].id
+    assert interviewer.is_finished is True
+    assert llm.calls == []
+
+
+def test_non_empty_answer_after_repeat_uses_existing_llm_decision() -> None:
+    """A non-empty retry answer continues through the normal LLM decision."""
     interviewer, llm, _ = make_interviewer(
         [model_result(decision("follow_up", "Can you give an example?"))]
     )
     interviewer.opening()
 
-    repeat = interviewer.next_turn("  ")
-    followed = interviewer.next_turn("")
+    interviewer.next_turn("")
+    followed = interviewer.next_turn("A detailed answer.")
 
-    assert repeat.kind == "repeat"
-    assert repeat.utterance == REPEAT_REQUEST
     assert followed.kind == "follow_up"
+    assert followed.utterance == "Can you give an example?"
     assert len(llm.calls) == 1
 
 

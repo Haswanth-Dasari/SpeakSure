@@ -42,6 +42,9 @@ OPENING_TEMPLATE_NAMELESS = (
 # Spoken request used once when the candidate provides no answer.
 REPEAT_REQUEST = "Sorry, I did not catch that. Could you please say it again?"
 
+# Neutral acknowledgement before moving on after a second empty answer.
+NO_ANSWER_ACK = "That is okay. Let us move on."
+
 # Neutral acknowledgement used when a safe next-question fallback is needed.
 FALLBACK_ACK = "Thank you."
 
