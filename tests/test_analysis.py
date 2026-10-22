@@ -260,4 +260,8 @@ def test_analyze_session_deep_copies_preserves_turn_data_and_summarizes():
     assert summary["thinking_time_by_turn"] == [1.0, None, 3.0]
     assert summary["mean_thinking_time_seconds"] == 2.0
     assert summary["mean_transcript_probability"] == pytest.approx(0.6833333333)
-    assert summary["analysis_versions"] == {"fluency": 1, "transcript_quality": 1}
+    assert summary["analysis_versions"] == {
+        "fluency": 1,
+        "transcript_quality": 1,
+        "audio_delivery": 1,
+    }

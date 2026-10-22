@@ -1,4 +1,4 @@
-"""Analyze a saved interview session using transcript-only heuristics."""
+"""Analyze a saved interview session using transcript and audio heuristics."""
 
 import argparse
 import sys
@@ -16,12 +16,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("session", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--audio-root", type=Path, default=Path("."))
     args = parser.parse_args(argv)
 
     try:
         source = args.session
         session = InterviewSession.load(source)
-        analyzed = analyze_session(session)
+        analyzed = analyze_session(session, audio_root=args.audio_root)
         output_path = args.out or (
             Path("data/analysis") / f"{source.stem}.analyzed.json"
         )
@@ -38,38 +39,55 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _print_report(session: InterviewSession) -> None:
-    """Print a fixed-width per-turn table and fluency summary."""
+    """Print per-turn audio metrics, pause comparison, and session summaries."""
     headers = (
         "turn",
         "words",
         "speech_s",
         "wpm",
-        "pauses",
-        "longest_pause",
-        "pause_ratio",
+        "audio_pauses",
+        "audio_longest",
+        "audio_pause_ratio",
+        "artic_wpm",
+        "level_std_db",
         "fillers",
         "hedges",
-        "repeats",
         "mean_prob",
     )
     print(" ".join(headers))
     for turn in session.turns:
         fluency = turn.analysis.get("fluency", {})
         quality = turn.analysis.get("transcript_quality", {})
+        delivery = turn.analysis.get("audio_delivery", {})
         values = (
             turn.index,
             fluency.get("word_count"),
             fluency.get("speech_seconds"),
             fluency.get("words_per_minute"),
-            fluency.get("pause_count"),
-            fluency.get("longest_pause_seconds"),
-            fluency.get("pause_ratio"),
+            delivery.get("pause_count") if delivery.get("has_audio") else None,
+            delivery.get("longest_pause_seconds") if delivery.get("has_audio") else None,
+            delivery.get("pause_ratio") if delivery.get("has_audio") else None,
+            delivery.get("articulation_rate_wpm") if delivery.get("has_audio") else None,
+            delivery.get("level_std_db") if delivery.get("has_audio") else None,
             fluency.get("filler_count"),
             fluency.get("hedge_count"),
-            fluency.get("immediate_repetitions"),
             quality.get("mean_word_probability"),
         )
         print(" ".join(_display(value) for value in values))
+        flags = delivery.get("quality_flags", [])
+        if flags:
+            print(f"  quality_flags: {', '.join(flags)}")
+
+    print("ASR-timestamp pauses vs audio pauses")
+    print("turn asr_pauses audio_pauses")
+    delivery_summary = session.analysis.get("delivery_summary", {})
+    for comparison in delivery_summary.get("asr_vs_audio_pauses", []):
+        print(
+            " ".join(
+                _display(comparison.get(key))
+                for key in ("turn", "asr_pause_count", "audio_pause_count")
+            )
+        )
 
     summary = session.analysis.get("fluency_summary", {})
     summary_fields = (
@@ -85,6 +103,18 @@ def _print_report(session: InterviewSession) -> None:
     )
     for field in summary_fields:
         print(f"{field}: {_display(summary.get(field))}")
+    print("Delivery summary")
+    for field in (
+        "audio_turns",
+        "mean_pause_ratio_audio",
+        "total_pause_seconds_audio",
+        "total_pause_count_audio",
+        "mean_articulation_rate_wpm",
+        "mean_level_std_db",
+        "pause_ratio_audio_by_turn",
+        "level_std_db_by_turn",
+    ):
+        print(f"{field}: {_display(delivery_summary.get(field))}")
 
 
 def _display(value: object) -> str:
