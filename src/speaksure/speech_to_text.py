@@ -19,6 +19,7 @@ from .configuration import (
     get_local_model_size,
     get_speech_to_text_provider,
     get_speech_to_text_hotwords,
+    get_speech_to_text_initial_prompt,
     get_speech_to_text_language,
     get_speech_to_text_vad_filter,
     get_transcription_model,
@@ -240,6 +241,7 @@ class LocalTranscriptionConfig:
     language: str = "en"
     vad_filter: bool = True
     hotwords: str = ""
+    initial_prompt: str = ""
 
     @classmethod
     def from_env(cls) -> "LocalTranscriptionConfig":
@@ -264,12 +266,14 @@ class LocalTranscriptionConfig:
             for word in get_speech_to_text_hotwords().split(",")
             if word.strip()
         )
+        initial_prompt = get_speech_to_text_initial_prompt()
         return cls(
             model_size=model_size,
             device=device,
             language=language,
             vad_filter=vad_setting == "true",
             hotwords=hotwords,
+            initial_prompt=initial_prompt,
         )
 
 
@@ -456,6 +460,7 @@ class LocalSpeechToTextProvider:
             "language": None if self.config.language == "auto" else self.config.language,
             "vad_filter": self.config.vad_filter,
             "hotwords": self.config.hotwords or None,
+            "initial_prompt": self.config.initial_prompt or None,
         }
         try:
             parameters = inspect.signature(model.transcribe).parameters

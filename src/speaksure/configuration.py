@@ -97,6 +97,14 @@ def get_speech_to_text_hotwords() -> str:
     return os.environ.get("SPEECH_TO_TEXT_HOTWORDS", "").strip()
 
 
+def get_speech_to_text_initial_prompt() -> str:
+    """Return the optional local transcription prompt, capped at 300 characters."""
+    prompt = os.environ.get("SPEECH_TO_TEXT_INITIAL_PROMPT", "").strip()
+    if len(prompt) > 300:
+        raise ValueError("SPEECH_TO_TEXT_INITIAL_PROMPT must be at most 300 characters.")
+    return prompt
+
+
 def get_text_to_speech_voice() -> str:
     """Return the configured Piper voice name or its default."""
     return (
