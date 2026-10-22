@@ -368,10 +368,22 @@ class InterviewSession:
         target_directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         target = target_directory / f"session_{timestamp}_{self.session_id[:8]}.json"
+        self._write_atomic(target)
+        return target
+
+    def save_to(self, path: Path) -> Path:
+        """Atomically save the session JSON to the exact requested file path."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._write_atomic(target)
+        return target
+
+    def _write_atomic(self, target: Path) -> None:
+        """Write JSON through a same-directory temporary file and replace atomically."""
         temporary_path: Path | None = None
         try:
             descriptor, temporary_name = tempfile.mkstemp(
-                prefix=f".{target.name}.", suffix=".tmp", dir=target_directory
+                prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
             )
             temporary_path = Path(temporary_name)
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
@@ -384,7 +396,6 @@ class InterviewSession:
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
-        return target
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> InterviewSession:

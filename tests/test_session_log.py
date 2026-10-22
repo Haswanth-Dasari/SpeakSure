@@ -93,6 +93,18 @@ def test_save_is_atomic_and_leaves_no_temporary_files(tmp_path):
     assert sorted(item.name for item in tmp_path.iterdir()) == [path.name]
 
 
+def test_save_to_is_atomic_creates_parent_directories_and_uses_exact_path(tmp_path):
+    session = make_session()
+    target = tmp_path / "nested" / "exact.json"
+
+    saved_path = session.save_to(target)
+
+    assert saved_path == target
+    assert target.is_file()
+    assert InterviewSession.load(target).to_dict() == session.to_dict()
+    assert [item.name for item in target.parent.iterdir()] == [target.name]
+
+
 def test_turn_without_answer_survives_round_trip():
     session = InterviewSession.new("Technical interview", "Advanced", 1)
     session.add_turn("Describe your project.", answer=None)
