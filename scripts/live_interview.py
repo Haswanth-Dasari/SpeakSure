@@ -15,6 +15,7 @@ from speaksure.audio_capture import (  # noqa: E402
     CaptureSettings,
     CapturedAnswer,
     calibrate_microphone,
+    describe_input_device,
     record_answer,
     wav_bytes,
 )
@@ -67,6 +68,8 @@ def main() -> int:
     parser.add_argument("--no-save-audio", action="store_true")
     parser.add_argument("--no-warmup", action="store_true")
     args = parser.parse_args()
+    input_device = describe_input_device(args.input_device)
+    print(f"Input device: {input_device.get('name', 'unknown')}")
 
     try:
         questions = select_questions(args.questions, seed=args.seed)
@@ -129,6 +132,7 @@ def main() -> int:
                 else stt_config.device,
                 "llm_model": llm_config.model,
                 "tts_voice": tts_config.voice_name,
+                "input_device": input_device,
                 "end_silence_seconds": args.end_silence,
                 "settle_seconds": args.settle_seconds,
                 "seed": args.seed,

@@ -1,4 +1,5 @@
 import io
+import sys
 import wave
 
 import numpy as np
@@ -13,6 +14,7 @@ from src.speaksure.audio_capture import (
     _build_noise_profile,
     calibrate_microphone,
     capture_answer,
+    describe_input_device,
     wav_bytes,
 )
 
@@ -302,3 +304,64 @@ def test_wav_bytes_round_trip_is_mono_16_bit_with_expected_length():
         assert wav_file.getsampwidth() == 2
         assert wav_file.getnframes() == len(samples)
         assert len(wav_file.readframes(wav_file.getnframes())) == len(samples) * 2
+
+
+def test_describe_input_device_by_index_and_default(monkeypatch):
+    devices = {
+        2: {
+            "name": "USB microphone",
+            "default_samplerate": 48000.0,
+            "hostapi": 1,
+        },
+        0: {
+            "name": "Default microphone",
+            "default_samplerate": 16000.0,
+            "hostapi": 0,
+        },
+    }
+    sounddevice = type(
+        "SoundDevice",
+        (),
+        {
+            "default": type("Default", (), {"device": (0, 3)})(),
+            "query_devices": staticmethod(lambda index: devices[index]),
+            "query_hostapis": staticmethod(
+                lambda: [{"name": "MME"}, {"name": "WASAPI"}]
+            ),
+        },
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+
+    assert describe_input_device(2) == {
+        "name": "USB microphone",
+        "index": 2,
+        "default_samplerate": 48000.0,
+        "host_api": "WASAPI",
+    }
+    assert describe_input_device(None) == {
+        "name": "Default microphone",
+        "index": 0,
+        "default_samplerate": 16000.0,
+        "host_api": "MME",
+    }
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_describe_input_device_returns_unknown_on_failures(monkeypatch, missing):
+    if missing:
+        monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
+        monkeypatch.setitem(sys.modules, "sounddevice", None)
+    else:
+        sounddevice = type(
+            "SoundDevice",
+            (),
+            {
+                "default": type("Default", (), {"device": (0, 0)})(),
+                "query_devices": staticmethod(
+                    lambda _index: (_ for _ in ()).throw(RuntimeError("unavailable"))
+                ),
+            },
+        )
+        monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+
+    assert describe_input_device(None) == {"name": "unknown"}

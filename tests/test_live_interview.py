@@ -419,6 +419,91 @@ def test_transcription_exception_apologizes_repeats_and_continues(tmp_path: Path
     assert interviewer.answers == ["A useful answer"]
 
 
+def test_transcription_error_is_reported_recorded_and_truncated(tmp_path: Path) -> None:
+    """Report a failed transcription, repeat listening, and retain bounded diagnostics."""
+    interviewer = FakeInterviewer(
+        [reply("closing", "Done.", latency=None)], question_count=1
+    )
+    session = make_session(1)
+    error_text = "x" * 250
+    transcriptions: deque[object] = deque(
+        [RuntimeError(error_text), transcript()]
+    )
+    samples = np.full(32000, 0.25, dtype=np.float32)
+    captures = deque([captured(samples=samples), captured(samples=samples)])
+    outputs: list[str] = []
+    spoken: list[str] = []
+
+    def transcribe(_capture: CapturedAnswer) -> TranscriptionResult:
+        """Fail once, then return a valid transcript."""
+        result = transcriptions.popleft()
+        if isinstance(result, Exception):
+            raise result
+        assert isinstance(result, TranscriptionResult)
+        return result
+
+    runner = LiveInterviewRunner(
+        interviewer=interviewer,  # type: ignore[arg-type]
+        session=session,
+        settings=LiveSettings(sessions_dir=tmp_path, save_audio=False),
+        listen=captures.popleft,
+        transcribe=transcribe,
+        speak=lambda text: spoken.append(text) or SpokenTiming(0.1, 0.2),
+        output=outputs.append,
+        sleep=lambda _seconds: None,
+        clock=FakeClock(),
+    )
+
+    runner.run()
+
+    assert any(
+        line == f"(transcription error: RuntimeError: {error_text[:200]})"
+        for line in outputs
+    )
+    assert any("Sorry" in line for line in spoken)
+    analysis = session.turns[0].analysis
+    assert analysis["transcription_errors"] == [
+        {
+            "type": "RuntimeError",
+            "message": error_text[:200],
+            "captured_seconds": 2.0,
+        }
+    ]
+    assert analysis["capture"] == {
+        "seconds": 2.0,
+        "peak": 0.25,
+        "rms_dbfs": pytest.approx(20 * np.log10(0.25)),
+        "stop_reason": "silence",
+        "attempts": 2,
+    }
+    assert sum(line.startswith("(heard ") for line in outputs) == 2
+    assert "(heard 2.0 s, peak 0.25, level -12.0 dB)" in outputs
+
+
+def test_normal_turn_has_no_transcription_errors(tmp_path: Path) -> None:
+    """A successful answer records an empty transcription error list."""
+    interviewer = FakeInterviewer(
+        [reply("closing", "Done.", latency=None)], question_count=1
+    )
+    session = make_session(1)
+    runner = LiveInterviewRunner(
+        interviewer=interviewer,  # type: ignore[arg-type]
+        session=session,
+        settings=LiveSettings(sessions_dir=tmp_path, save_audio=False),
+        listen=lambda: captured(),
+        transcribe=lambda _capture: transcript(),
+        speak=lambda _text: SpokenTiming(0.1, 0.2),
+        output=lambda _text: None,
+        sleep=lambda _seconds: None,
+        clock=FakeClock(),
+    )
+
+    runner.run()
+
+    assert session.turns[0].analysis["transcription_errors"] == []
+    assert session.turns[0].analysis["capture"]["attempts"] == 1
+
+
 def test_speech_failure_is_logged_and_does_not_stop_interview(tmp_path: Path) -> None:
     """A failed TTS response falls back to printed text and is logged."""
     interviewer = FakeInterviewer([reply("closing", "The end.", latency=None)], question_count=1)

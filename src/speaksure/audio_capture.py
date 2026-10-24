@@ -371,6 +371,31 @@ def list_input_devices() -> list[tuple[int, str]]:
     ]
 
 
+def describe_input_device(device: int | None) -> dict[str, object]:
+    """Describe an input device, returning an unknown marker on lookup failures."""
+    try:
+        import sounddevice as sd
+
+        index = int(sd.default.device[0]) if device is None else device
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            return {"name": "unknown"}
+        details = sd.query_devices(index)
+        host_api_index = details.get("hostapi")
+        host_api: str | int | None = host_api_index
+        if isinstance(host_api_index, int):
+            host_apis = sd.query_hostapis()
+            if 0 <= host_api_index < len(host_apis):
+                host_api = str(host_apis[host_api_index].get("name", host_api_index))
+        return {
+            "name": str(details["name"]),
+            "index": index,
+            "default_samplerate": float(details["default_samplerate"]),
+            "host_api": host_api,
+        }
+    except Exception:
+        return {"name": "unknown"}
+
+
 def wav_bytes(
     samples: NDArray[np.float32], sample_rate: int = SAMPLE_RATE
 ) -> bytes:

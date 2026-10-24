@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+
 from .audio_capture import CapturedAnswer, save_wav
 from .interviewer import Interviewer
 from .interviewer_prompts import REPEAT_REQUEST
@@ -115,11 +117,23 @@ class LiveInterviewRunner:
             current_question_id: str | None = self._interviewer.plan.questions[0].id
             current_is_follow_up = False
             empty_attempts = 0
+            listen_attempts = 0
+            transcription_errors: list[dict[str, object]] = []
 
             while not self._interviewer.is_finished:
                 self._sleep(self._settings.settle_seconds)
                 self._output("Listening...")
                 captured = self._listen()
+                listen_attempts += 1
+                capture_diagnostics = _capture_diagnostics(
+                    captured, attempts=listen_attempts
+                )
+                if captured.samples.size:
+                    self._output(
+                        f"(heard {capture_diagnostics['seconds']:.1f} s, "
+                        f"peak {capture_diagnostics['peak']:.2f}, "
+                        f"level {capture_diagnostics['rms_dbfs']:.1f} dB)"
+                    )
                 raw_result: TranscriptionResult | None = None
                 stt_seconds = 0.0
                 answer_text = ""
@@ -128,9 +142,20 @@ class LiveInterviewRunner:
                     started_at = self._clock()
                     try:
                         raw_result = self._transcribe(captured)
-                    except Exception:
+                    except Exception as error:
                         stt_seconds = self._clock() - started_at
                         empty_attempts += 1
+                        message = str(error)[:200]
+                        transcription_errors.append(
+                            {
+                                "type": type(error).__name__,
+                                "message": message,
+                                "captured_seconds": capture_diagnostics["seconds"],
+                            }
+                        )
+                        self._output(
+                            f"(transcription error: {type(error).__name__}: {message})"
+                        )
                         self._output("Sorry, I could not understand that. Please try again.")
                         self._speak_or_report(REPEAT_REQUEST)
                         continue
@@ -208,6 +233,8 @@ class LiveInterviewRunner:
                     },
                     "empty_attempts": empty_attempts,
                     "low_confidence_words": low_confidence_words,
+                    "transcription_errors": list(transcription_errors),
+                    "capture": capture_diagnostics,
                 }
                 if self._pending_speech_failure:
                     analysis["speech_output_failed"] = True
@@ -244,6 +271,8 @@ class LiveInterviewRunner:
                     current_question_id = reply.question_id
                     current_is_follow_up = False
                 empty_attempts = 0
+                listen_attempts = 0
+                transcription_errors = []
         except KeyboardInterrupt:
             self._save_session()
             self._output("Interview stopped early.")
@@ -275,3 +304,21 @@ def _empty_transcription() -> TranscriptionResult:
         language_probability=0.0,
         device="none",
     )
+
+
+def _capture_diagnostics(
+    captured: CapturedAnswer, *, attempts: int
+) -> dict[str, object]:
+    """Compute sample-level diagnostics for one capture and include attempt count."""
+    samples = np.asarray(captured.samples, dtype=np.float64)
+    seconds = len(samples) / captured.sample_rate if captured.sample_rate > 0 else 0.0
+    peak = float(np.max(np.abs(samples))) if samples.size else 0.0
+    rms = float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
+    rms_dbfs = 20.0 * math.log10(max(rms, 1e-6))
+    return {
+        "seconds": seconds,
+        "peak": peak,
+        "rms_dbfs": rms_dbfs,
+        "stop_reason": captured.stop_reason,
+        "attempts": attempts,
+    }
