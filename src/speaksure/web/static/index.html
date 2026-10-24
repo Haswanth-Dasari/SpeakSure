@@ -3,12 +3,193 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SpeakSure</title>
+  <title>SpeakSure – Interactive Mock Interview</title>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <main>
-    <h1>SpeakSure</h1>
-    <p>The browser front end is pending. The local interview API is available under <code>/api</code>.</p>
-  </main>
+  <!-- Aria-live announcement region for screen readers -->
+  <div id="live-announcer" class="sr-only" aria-live="polite"></div>
+
+  <div class="app-container">
+    <header class="app-header">
+      <h1 class="app-title">SpeakSure</h1>
+      <span id="stt-status-badge" class="badge">STT: Checking…</span>
+    </header>
+
+    <main>
+      <!-- Screen A: Setup -->
+      <section id="screen-setup" class="screen" aria-labelledby="setup-heading">
+        <h2 id="setup-heading" class="screen-title">Mock Interview Setup</h2>
+        <p class="screen-description">Configure your practice session, verify your microphone, and begin.</p>
+
+        <form id="setup-form" novalidate>
+          <div class="form-group">
+            <label for="questions-count" class="form-label">Number of questions (3–10)</label>
+            <input type="number" id="questions-count" class="form-control" min="3" max="10" value="5" required>
+          </div>
+
+          <div class="form-group">
+            <label for="candidate-name" class="form-label">Your name (optional)</label>
+            <input type="text" id="candidate-name" class="form-control" placeholder="e.g. Alex" maxlength="120">
+          </div>
+
+          <div class="form-group">
+            <label for="vocabulary-hints" class="form-label">Words that may appear in your answers (names, college, tools) – comma separated</label>
+            <input type="text" id="vocabulary-hints" class="form-control" placeholder="e.g. SpeakSure, FastAPI, PyTorch, CTranslate2">
+            <div class="form-hint">Stored for this session to guide speech recognition vocabulary.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label" for="content-scoring-check">
+              <input type="checkbox" id="content-scoring-check">
+              <span>Include AI content scoring</span>
+            </label>
+            <div id="content-scoring-note" class="form-hint hidden">AI content scoring requires Groq API key configuration on the server.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label" for="review-check">
+              <input type="checkbox" id="review-check">
+              <span>Review my answer before sending</span>
+            </label>
+            <div class="form-hint">Listen to each recording before submitting it to the interviewer.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="mic-select">Microphone selection</label>
+            <div class="button-group" style="margin-top: 0; margin-bottom: 0.75rem;">
+              <button type="button" id="grant-mic-btn" class="button button-secondary">Grant microphone</button>
+            </div>
+            <select id="mic-select" class="form-control" disabled>
+              <option value="">Grant microphone permission above first</option>
+            </select>
+          </div>
+
+          <!-- Bluetooth Warning Banner -->
+          <div id="bluetooth-warning" class="alert-box alert-warning hidden" role="alert">
+            <strong>Microphone notice:</strong> This looks like a Bluetooth headset microphone, which usually records muffled audio and lowers recognition accuracy. Choose your laptop microphone if you have the option.
+          </div>
+
+          <!-- Microphone Test Section -->
+          <div class="form-group" style="border-top: 1px solid var(--border-color); padding-top: 1rem;">
+            <label class="form-label">Test your microphone</label>
+            <button type="button" id="test-mic-btn" class="button button-secondary" disabled>Test microphone</button>
+            <div id="test-meter-container" class="hidden" style="margin-top: 0.75rem;">
+              <div class="meter-wrapper">
+                <div id="test-meter-bar" class="meter-fill meter-normal"></div>
+              </div>
+              <div id="test-assessment" class="test-assessment-badge" aria-live="polite"></div>
+              <div style="margin-top: 0.5rem;">
+                <audio id="test-audio-playback" controls class="hidden" style="width: 100%; height: 36px;"></audio>
+              </div>
+            </div>
+          </div>
+
+          <div class="button-group">
+            <button type="submit" id="start-interview-btn" class="button button-primary" disabled>Start interview</button>
+          </div>
+        </form>
+
+        <div style="margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 1.25rem;">
+          <h3 style="font-size: 1.05rem; margin: 0 0 0.5rem 0;">Past Sessions</h3>
+          <div id="past-sessions-container">Loading previous sessions…</div>
+        </div>
+      </section>
+
+      <!-- Screen B: Interview -->
+      <section id="screen-interview" class="screen hidden" aria-labelledby="turn-indicator">
+        <div class="turn-header">
+          <div id="turn-indicator" class="turn-counter">Question 1 of 5</div>
+          <div id="interview-status-badge" class="status-badge status-speaking">Interviewer is speaking</div>
+        </div>
+
+        <div id="question-text" class="question-display" aria-live="polite">Question loading…</div>
+
+        <button type="button" id="play-question-btn" class="button button-secondary hidden" style="margin-bottom: 1rem;">
+          Play question audio
+        </button>
+
+        <!-- Listening panel -->
+        <div id="listening-panel" class="listening-card hidden">
+          <div class="listening-info">
+            <span>Listening to your answer…</span>
+            <span id="timer-display" class="monospace">00:00</span>
+          </div>
+          <div class="meter-wrapper">
+            <div id="listening-meter-bar" class="meter-fill meter-normal"></div>
+          </div>
+          <div class="form-hint" style="margin-bottom: 0.75rem;">
+            Answer automatically finishes after 2.5 seconds of silence, or click below.
+          </div>
+          <div class="button-group" style="margin-top: 0.5rem;">
+            <button type="button" id="stop-answering-btn" class="button button-primary">Stop answering</button>
+          </div>
+        </div>
+
+        <!-- Review before sending panel -->
+        <div id="review-panel" class="listening-card hidden">
+          <div class="listening-info">
+            <span>Review your recorded answer</span>
+          </div>
+          <audio id="review-audio" controls style="width: 100%; height: 40px; margin: 0.5rem 0;"></audio>
+          <div class="button-group" style="margin-top: 0.5rem;">
+            <button type="button" id="send-answer-btn" class="button button-primary">Send answer</button>
+            <button type="button" id="rerecord-btn" class="button button-secondary">Re-record</button>
+          </div>
+        </div>
+
+        <!-- No speech detected alert -->
+        <div id="no-speech-notice" class="alert-box alert-warning hidden" role="alert">
+          <p style="margin: 0 0 0.5rem 0;"><strong>I did not hear you.</strong> No clear speech was detected during the 15-second window.</p>
+          <button type="button" id="retry-no-speech-btn" class="button button-secondary">Try again</button>
+        </div>
+
+        <!-- Upload error notice (retains recorded WAV in memory) -->
+        <div id="upload-error-notice" class="alert-box alert-danger hidden" role="alert">
+          <p id="upload-error-message" style="margin: 0 0 0.5rem 0;">Upload failed.</p>
+          <button type="button" id="retry-upload-btn" class="button button-secondary">Try again</button>
+        </div>
+
+        <!-- Transcript Card -->
+        <div id="transcript-card" class="transcript-box hidden">
+          <div class="transcript-heading">What I heard:</div>
+          <p id="transcript-text" class="transcript-body"></p>
+          <div id="transcript-flags"></div>
+        </div>
+
+        <div class="button-group" style="margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+          <button type="button" id="end-early-btn" class="button button-danger">End interview early</button>
+        </div>
+      </section>
+
+      <!-- Screen C: Results -->
+      <section id="screen-results" class="screen hidden" aria-labelledby="results-heading">
+        <h2 id="results-heading" class="screen-title">Interview Completed</h2>
+        <p id="results-status" class="screen-description" aria-live="polite">Analyzing interview… Please wait.</p>
+
+        <div id="results-progress-bar" class="progress-bar">
+          <div class="progress-bar-fill progress-indeterminate"></div>
+        </div>
+
+        <div id="results-error-notice" class="alert-box alert-danger hidden" role="alert">
+          <p id="results-error-message" style="margin: 0 0 0.5rem 0;">Analysis error.</p>
+          <button type="button" id="retry-results-btn" class="button button-secondary">Retry</button>
+        </div>
+
+        <div id="report-container" class="hidden">
+          <div class="report-iframe-wrapper">
+            <iframe id="report-frame" sandbox="allow-same-origin" title="Mock interview feedback report"></iframe>
+          </div>
+        </div>
+
+        <div id="results-actions" class="button-group hidden">
+          <button type="button" id="open-new-tab-btn" class="button button-secondary">Open in new tab</button>
+          <button type="button" id="new-interview-btn" class="button button-primary">Start new interview</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

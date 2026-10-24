@@ -103,7 +103,12 @@ class SpeechToTextProvider(Protocol):
     def transcribe(self, audio: bytes, *, filename: str, content_type: str) -> str: ...
 
     def transcribe_detailed(
-        self, audio: bytes, *, filename: str, content_type: str
+        self,
+        audio: bytes,
+        *,
+        filename: str,
+        content_type: str,
+        hotwords: str | None = None,
     ) -> TranscriptionResult:
         """Return a transcript with detailed recognition metadata when available."""
         ...
@@ -414,7 +419,12 @@ class LocalSpeechToTextProvider:
         ).text
 
     def transcribe_detailed(
-        self, audio: bytes, *, filename: str, content_type: str
+        self,
+        audio: bytes,
+        *,
+        filename: str,
+        content_type: str,
+        hotwords: str | None = None,
     ) -> TranscriptionResult:
         """Transcribe audio locally and return text, word timings, and metadata."""
         del filename
@@ -429,7 +439,9 @@ class LocalSpeechToTextProvider:
                     "No audio was found in the recording. Record a response or type your answer."
                 )
             try:
-                transcript, words, info = self._transcribe_decoded(model, decoded_audio)
+                transcript, words, info = self._transcribe_decoded(
+                    model, decoded_audio, hotwords=hotwords
+                )
                 self.actual_device = device
             except SpeechToTextError:
                 raise
@@ -437,7 +449,9 @@ class LocalSpeechToTextProvider:
                 if self.config.device != "auto" or device != "cuda":
                     raise
                 model, device, _ = self._model_loader(self.config.model_size, "cpu")
-                transcript, words, info = self._transcribe_decoded(model, decoded_audio)
+                transcript, words, info = self._transcribe_decoded(
+                    model, decoded_audio, hotwords=hotwords
+                )
                 self.actual_device = "cpu"
                 _LOADED_LOCAL_DEVICES[(self.config.model_size, "auto")] = "cpu"
         except SpeechToTextError:
@@ -468,14 +482,18 @@ class LocalSpeechToTextProvider:
         )
 
     def _transcribe_decoded(
-        self, model: WhisperModelLike, audio: object
+        self,
+        model: WhisperModelLike,
+        audio: object,
+        hotwords: str | None = None,
     ) -> tuple[str, tuple[TranscriptWord, ...], _TranscriptionInfo]:
+        effective_hotwords = hotwords if hotwords is not None else (self.config.hotwords or None)
         options: dict[str, object] = {
             "beam_size": 5,
             "word_timestamps": True,
             "language": None if self.config.language == "auto" else self.config.language,
             "vad_filter": self.config.vad_filter,
-            "hotwords": self.config.hotwords or None,
+            "hotwords": effective_hotwords or None,
             "initial_prompt": self.config.initial_prompt or None,
         }
         try:
@@ -542,9 +560,15 @@ class OpenAISpeechToTextProvider:
         ).text
 
     def transcribe_detailed(
-        self, audio: bytes, *, filename: str, content_type: str
+        self,
+        audio: bytes,
+        *,
+        filename: str,
+        content_type: str,
+        hotwords: str | None = None,
     ) -> TranscriptionResult:
         """Transcribe through OpenAI; word and local-device metadata are unavailable."""
+        del hotwords
         validate_audio(audio, content_type)
         normalized_content_type = content_type.split(";", 1)[0].strip().lower()
         try:

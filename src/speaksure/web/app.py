@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, Field, StrictInt, field_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -61,6 +61,13 @@ from ..live_interview import (
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _AUDIO_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+STATIC_DIR = Path(__file__).parent / "static"
+STATIC_MIME_TYPES: dict[str, str] = {
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".svg": "image/svg+xml",
+}
 
 
 class TTSProvider(Protocol):
@@ -128,7 +135,33 @@ class CreateSessionRequest(BaseModel):
 
     questions: StrictInt = Field(ge=3, le=10)
     candidate_name: str | None = Field(default=None, max_length=120)
+    vocabulary_hints: list[str] | str | None = Field(default=None)
     client: ClientInfo
+
+    @field_validator("vocabulary_hints", mode="before")
+    @classmethod
+    def validate_vocabulary_hints(cls, value: object) -> list[str] | None:
+        """Validate and normalize vocabulary hints (max 40 terms, 1-40 chars each)."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            raw_terms = [t.strip() for t in stripped.split(",")]
+        elif isinstance(value, list):
+            if not all(isinstance(x, str) for x in value):
+                raise ValueError("All vocabulary hints must be strings.")
+            raw_terms = [x.strip() for x in value]
+        else:
+            raise ValueError("vocabulary_hints must be a list of strings or comma-separated string.")
+
+        if len(raw_terms) > 40:
+            raise ValueError("vocabulary_hints cannot exceed 40 terms.")
+        for term in raw_terms:
+            if not (1 <= len(term) <= 40):
+                raise ValueError("Each vocabulary hint must be between 1 and 40 characters after trimming.")
+        return raw_terms
 
 
 def create_app(
@@ -193,10 +226,29 @@ def create_app(
         )
 
     @app.get("/", response_class=HTMLResponse)
-    def pending_frontend() -> HTMLResponse:
-        """Serve the placeholder until the browser interface is implemented."""
-        index_path = Path(__file__).parent / "static" / "index.html"
-        return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    def index() -> Response:
+        """Serve the frontend entry point with no-cache header."""
+        index_path = STATIC_DIR / "index.html"
+        if not index_path.is_file():
+            return _error_response(404, "not_found", "The requested resource was not found.")
+        return HTMLResponse(
+            index_path.read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @app.get("/static/{file_path:path}")
+    def serve_static(file_path: str) -> Response:
+        """Serve static assets with exact MIME types and no-cache header."""
+        target_path = (STATIC_DIR / file_path).resolve()
+        static_root = STATIC_DIR.resolve()
+        if static_root not in target_path.parents or not target_path.is_file():
+            return _error_response(404, "not_found", "The requested resource was not found.")
+        mime_type = STATIC_MIME_TYPES.get(target_path.suffix.lower(), "application/octet-stream")
+        return Response(
+            content=target_path.read_bytes(),
+            media_type=mime_type,
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
@@ -234,6 +286,8 @@ def create_app(
             "input_device": payload.client.input_device_label,
             "capture_constraints": payload.client.constraints,
         }
+        if payload.vocabulary_hints:
+            metadata["vocabulary_hints"] = payload.vocabulary_hints
         session = create_session_record(payload.questions, metadata)
         session_path = active_services.sessions_dir / f"session_{session.session_id}.json"
         session.save_to(session_path)
@@ -530,6 +584,22 @@ def _parse_pcm16_mono_wav(audio_bytes: bytes) -> tuple[np.ndarray, int, float]:
     return samples, sample_rate, duration_seconds
 
 
+def _combine_hotwords(global_hotwords: str, session_hints: list[str] | None) -> str | None:
+    """Combine global transcription hotwords with session-specific vocabulary hints."""
+    parts: list[str] = []
+    if global_hotwords and global_hotwords.strip():
+        for item in global_hotwords.split(","):
+            cleaned = item.strip()
+            if cleaned and cleaned not in parts:
+                parts.append(cleaned)
+    if session_hints:
+        for hint in session_hints:
+            cleaned = hint.strip()
+            if cleaned and cleaned not in parts:
+                parts.append(cleaned)
+    return ", ".join(parts) if parts else None
+
+
 def _process_web_answer(
     entry: WebSession,
     parsed_wav: tuple[np.ndarray, int, float],
@@ -559,12 +629,21 @@ def _process_web_answer(
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(audio_bytes)
 
+        session_hints = entry.session.metadata.get("vocabulary_hints")
+        global_hotwords = getattr(settings.stt_config, "hotwords", "")
+        combined_hotwords = _combine_hotwords(global_hotwords, session_hints)
+
         def transcribe(_captured: CapturedAnswer) -> TranscriptionResult:
             """Transcribe the validated, saved browser WAV using the configured provider."""
+            kwargs: dict[str, Any] = {
+                "filename": audio_path.name,
+                "content_type": "audio/wav",
+            }
+            if combined_hotwords is not None:
+                kwargs["hotwords"] = combined_hotwords
             return services.stt_provider.transcribe_detailed(
                 audio_path.read_bytes(),
-                filename=audio_path.name,
-                content_type="audio/wav",
+                **kwargs,
             )
 
         processed: TurnProcessingResult = process_interview_turn(

@@ -101,14 +101,20 @@ The benchmark writes a non-overwriting CSV plus a Markdown summary with referenc
 
 ## Web app
 
-Run the local API from the project directory:
-```powershell
-python scripts/run_web.py
-```
-It binds to `127.0.0.1:8000`; `--port 8010` changes the port. Remote binding requires `--host 0.0.0.0 --allow-remote`.
-The browser frontend is pending; the API accepts browser-recorded raw `audio/wav` uploads.
-Endpoints: `GET /api/health`, `POST /api/sessions`, `GET /api/sessions`, `POST /api/sessions/{id}/answer`, `POST /api/sessions/{id}/finish`.
-Also: `GET /api/sessions/{id}/status`, `GET /api/sessions/{id}/audio/{name}.wav`, and `GET /report/{id}`.
+Start the local server with `python scripts/run_web.py` and open `http://127.0.0.1:8000` in Google Chrome or Microsoft Edge.
+Microphone advice: Prefer a laptop microphone or wired input; avoid Bluetooth hands-free profiles due to muffled audio.
+
+Manual test checklist (10 steps):
+1. Setup: Check STT model status, set 3 questions, enter candidate name and optional vocabulary hints.
+2. Mic grant: Click "Grant microphone" and select your laptop microphone from the enumerated list.
+3. Mic test: Click "Test microphone", speak for 3 seconds, confirm "Good level", and play back test audio.
+4. Begin interview: Click "Start interview", listen to the interviewer audio, and verify automatic listening turn start.
+5. Normal turn: Speak an answer; verify live level meter and automatic answer submission after 2.5 s of silence.
+6. Transcript & flags: Verify "What I heard:" displays your transcript with any relevant delivery flags.
+7. Repeat request: In a turn, ask for clarification or test 15 s silence timeout ("I did not hear you" retry).
+8. Early end: Click "End interview early", confirm the prompt, and verify transition to the results screen.
+9. Report display: Observe status polling until "ready", then review the report rendered inside the sandboxed iframe.
+10. Past sessions: Click "Start new interview", verify the completed session appears in the list, and open its report link.
 
 ## Content scoring evaluation (E3)
 

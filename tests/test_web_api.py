@@ -109,10 +109,12 @@ class FakeSTT:
         self.responses = deque(responses or [])
         self.actual_device = "cpu"
         self.calls = 0
+        self.last_kwargs: dict[str, object] = {}
 
     def transcribe_detailed(self, *_args: object, **_kwargs: object) -> TranscriptionResult:
         """Return one fake transcript or raise the next scripted exception."""
         self.calls += 1
+        self.last_kwargs = dict(_kwargs)
         response = self.responses.popleft() if self.responses else _transcript()
         if isinstance(response, Exception):
             raise response
@@ -161,6 +163,7 @@ def _transcript(text: str = "A useful candidate answer.") -> TranscriptionResult
 def _client(
     tmp_path: Path,
     *,
+    stt_config: LocalTranscriptionConfig | None = None,
     stt_responses: list[object] | None = None,
     actions: list[tuple[str, str]] | None = None,
     analysis: object | None = None,
@@ -168,7 +171,7 @@ def _client(
 ) -> tuple[TestClient, FakeSTT, FakeTTS, dict[str, object]]:
     """Build a FastAPI test client with isolated files and injectable fakes."""
     settings = WebSettings(
-        stt_config=LocalTranscriptionConfig(model_size="base", device="cpu"),
+        stt_config=stt_config or LocalTranscriptionConfig(model_size="base", device="cpu"),
         tts_config=SpeechSynthesisConfig(
             voice_name="fake-voice",
             models_dir=tmp_path,
@@ -508,3 +511,175 @@ def test_audio_session_and_report_path_traversal_are_not_served(tmp_path):
 
     assert audio.status_code == 404
     assert report.status_code == 404
+
+
+def test_static_files_served_with_correct_mime_and_no_cache(tmp_path):
+    client, _stt, _tts, _created = _client(tmp_path)
+
+    # 1. GET / serves index.html with no-cache
+    root = client.get("/")
+    assert root.status_code == 200
+    assert root.headers["content-type"].startswith("text/html")
+    assert root.headers.get("cache-control") == "no-cache"
+    assert "SpeakSure" in root.text
+
+    # 2. GET /static/app.css serves text/css with no-cache
+    css = client.get("/static/app.css")
+    assert css.status_code == 200
+    assert css.headers["content-type"].startswith("text/css")
+    assert css.headers.get("cache-control") == "no-cache"
+
+    # 3. GET /static/js/main.js serves text/javascript with no-cache
+    js = client.get("/static/js/main.js")
+    assert js.status_code == 200
+    assert js.headers["content-type"].startswith("text/javascript")
+    assert js.headers.get("cache-control") == "no-cache"
+
+    # 4. GET /static/selftest.html serves text/html with no-cache
+    selftest = client.get("/static/selftest.html")
+    assert selftest.status_code == 200
+    assert selftest.headers["content-type"].startswith("text/html")
+    assert selftest.headers.get("cache-control") == "no-cache"
+
+    # 5. Traversal and nonexistent files return 404
+    assert client.get("/static/../app.py").status_code == 404
+    assert client.get("/static/nonexistent.xyz").status_code == 404
+
+
+def test_no_static_file_contains_external_urls():
+    static_dir = Path(__file__).resolve().parents[1] / "src" / "speaksure" / "web" / "static"
+    assert static_dir.is_dir()
+    for file_path in static_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        text = file_path.read_text(encoding="utf-8", errors="ignore")
+        for line in text.splitlines():
+            # Disallow http:// and https:// except for localhost in comments
+            if "http://" in line or "https://" in line:
+                cleaned = line.strip()
+                if "localhost" in cleaned and (cleaned.startswith("//") or cleaned.startswith("/*") or cleaned.startswith("#") or cleaned.startswith("<!--")):
+                    continue
+                assert False, f"Static file {file_path.name} contains external URL: {line}"
+
+
+def test_vocabulary_hints_flow_and_validation(tmp_path):
+    # Test global config + session hints combination
+    client, stt, _tts, _created = _client(
+        tmp_path,
+        stt_config=LocalTranscriptionConfig(model_size="base", device="cpu", hotwords="GlobalWord"),
+    )
+
+    # 1. Session A with vocabulary_hints list
+    res_a = client.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "candidate_name": "Student",
+            "vocabulary_hints": ["SpeakSure", "FastAPI"],
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert res_a.status_code == 200
+    session_a_id = res_a.json()["session_id"]
+    entry_a = client.app.state.registry.get(session_a_id)
+    assert entry_a.session.metadata["vocabulary_hints"] == ["SpeakSure", "FastAPI"]
+
+    # 2. Session B without hints (absent hints change nothing)
+    res_b = client.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "candidate_name": "Student",
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert res_b.status_code == 200
+    session_b_id = res_b.json()["session_id"]
+    entry_b = client.app.state.registry.get(session_b_id)
+    assert "vocabulary_hints" not in entry_b.session.metadata
+
+    # 3. Answer for Session A -> hotwords contains combined global and session hints
+    _answer(client, session_a_id)
+    hotwords_a = stt.last_kwargs.get("hotwords")
+    assert hotwords_a == "GlobalWord, SpeakSure, FastAPI"
+
+    # 4. Answer for Session B -> hotwords contains ONLY global hotwords (session A hints do not leak)
+    _answer(client, session_b_id)
+    hotwords_b = stt.last_kwargs.get("hotwords")
+    assert hotwords_b == "GlobalWord"
+
+    # 5. Comma-separated string format accepted
+    res_c = client.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "vocabulary_hints": "Alpha, Beta, Gamma",
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert res_c.status_code == 200
+    session_c_id = res_c.json()["session_id"]
+    entry_c = client.app.state.registry.get(session_c_id)
+    assert entry_c.session.metadata["vocabulary_hints"] == ["Alpha", "Beta", "Gamma"]
+
+    _answer(client, session_c_id)
+    assert stt.last_kwargs.get("hotwords") == "GlobalWord, Alpha, Beta, Gamma"
+
+    # 6. Absent hints without global config -> hotwords is None
+    client_no_global, stt_no_global, _, _ = _client(tmp_path / "no_global")
+    res_d = client_no_global.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert res_d.status_code == 200
+    _answer(client_no_global, res_d.json()["session_id"])
+    assert stt_no_global.last_kwargs.get("hotwords") is None
+
+    # 7. Validation failures: rejected with 422
+    # Too many terms (> 40)
+    invalid_too_many = client.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "vocabulary_hints": [f"term{i}" for i in range(41)],
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert invalid_too_many.status_code == 422
+    assert set(invalid_too_many.json()) == {"error", "message"}
+
+    # Term too long (> 40 chars)
+    invalid_too_long = client.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "vocabulary_hints": ["a" * 41],
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert invalid_too_long.status_code == 422
+
+    # Empty term in list
+    invalid_empty = client.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "vocabulary_hints": ["valid", "   "],
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert invalid_empty.status_code == 422
+
+    # Non-string element
+    invalid_type = client.post(
+        "/api/sessions",
+        json={
+            "questions": 3,
+            "vocabulary_hints": [123],
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert invalid_type.status_code == 422
