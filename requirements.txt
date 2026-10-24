@@ -1,6 +1,14 @@
 streamlit>=1.39.0
+fastapi==0.115.12
+uvicorn==0.34.2
 pytest
 openai
 python-dotenv
 faster-whisper>=1.1.0
 av>=11,<19
+jiwer
+numpy
+sounddevice
+piper-tts
+spacy>=3.8,<3.9
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl

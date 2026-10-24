@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import io
 import os
 import sys
@@ -16,8 +17,13 @@ from .configuration import (
     get_api_key,
     get_local_device,
     get_local_model_size,
+    get_speech_to_text_hotwords,
+    get_speech_to_text_initial_prompt,
+    get_speech_to_text_language,
     get_speech_to_text_provider,
+    get_speech_to_text_vad_filter,
     get_transcription_model,
+    get_speech_to_text_provider,
 )
 
 
@@ -96,15 +102,63 @@ class LocalModelError(SpeechToTextError):
 class SpeechToTextProvider(Protocol):
     def transcribe(self, audio: bytes, *, filename: str, content_type: str) -> str: ...
 
+    def transcribe_detailed(
+        self, audio: bytes, *, filename: str, content_type: str
+    ) -> TranscriptionResult:
+        """Return a transcript with detailed recognition metadata when available."""
+        ...
+
+
+@dataclass(frozen=True)
+class TranscriptWord:
+    """A recognized word with its timing and model confidence."""
+
+    text: str
+    start: float
+    end: float
+    probability: float
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    """A transcript and available metadata; remote metadata is unknown (empty or zero)."""
+
+    text: str
+    words: tuple[TranscriptWord, ...]
+    duration_seconds: float
+    language: str
+    language_probability: float
+    device: str
+
 
 class TranscriptionSegment(Protocol):
+    """The transcription data exposed for one recognized segment."""
+
     text: str
+    words: Iterable[_TranscriptionWordLike] | None
+
+
+class _TranscriptionWordLike(Protocol):
+    """The timing and confidence fields exposed for one recognized word."""
+
+    word: str
+    start: float
+    end: float
+    probability: float
+
+
+class _TranscriptionInfo(Protocol):
+    """Language and duration metadata returned by faster-whisper."""
+
+    duration: float
+    language: str
+    language_probability: float
 
 
 class WhisperModelLike(Protocol):
     def transcribe(
-        self, audio: object, *, beam_size: int
-    ) -> tuple[Iterable[TranscriptionSegment], object]: ...
+        self, audio: object, **kwargs: object
+    ) -> tuple[Iterable[TranscriptionSegment], _TranscriptionInfo]: ...
 
 
 def validate_audio(audio: bytes, content_type: str) -> None:
@@ -185,6 +239,10 @@ def diagnose_transcription_configuration() -> dict[str, bool | str]:
 class LocalTranscriptionConfig:
     model_size: str
     device: str
+    language: str = "en"
+    vad_filter: bool = True
+    hotwords: str = ""
+    initial_prompt: str = ""
 
     @classmethod
     def from_env(cls) -> "LocalTranscriptionConfig":
@@ -196,7 +254,43 @@ class LocalTranscriptionConfig:
         device = get_local_device()
         if device not in {"auto", "cpu", "cuda"}:
             raise LocalModelError("SPEECH_TO_TEXT_DEVICE must be auto, cpu, or cuda.")
-        return cls(model_size=model_size, device=device)
+        language = get_speech_to_text_language()
+        if language != "auto" and (
+            not language.isalpha() or len(language) not in {2, 3}
+        ):
+            raise LocalModelError("SPEECH_TO_TEXT_LANGUAGE must be a language code or auto.")
+        vad_setting = get_speech_to_text_vad_filter()
+        if vad_setting not in {"true", "false"}:
+            raise LocalModelError("SPEECH_TO_TEXT_VAD_FILTER must be true or false.")
+        hotwords = ", ".join(
+            word.strip()
+            for word in get_speech_to_text_hotwords().split(",")
+            if word.strip()
+        )
+        initial_prompt = get_speech_to_text_initial_prompt()
+        return cls(
+            model_size=model_size,
+            device=device,
+            language=language,
+            vad_filter=vad_setting == "true",
+            hotwords=hotwords,
+            initial_prompt=initial_prompt,
+        )
+
+
+def describe_stt_configuration(
+    config: LocalTranscriptionConfig,
+) -> dict[str, str | bool]:
+    """Return safe, non-secret details about the selected STT configuration."""
+    return {
+        "provider": get_speech_to_text_provider(),
+        "model": config.model_size,
+        "device_setting": config.device,
+        "language": config.language,
+        "vad_filter": config.vad_filter,
+        "hotwords_set": bool(config.hotwords),
+        "initial_prompt_set": bool(config.initial_prompt),
+    }
 
 
 def resolve_local_device(preference: str) -> str:
@@ -314,6 +408,15 @@ class LocalSpeechToTextProvider:
         self.actual_device = "not-initialized"
 
     def transcribe(self, audio: bytes, *, filename: str, content_type: str) -> str:
+        """Transcribe audio and return only its recognized text."""
+        return self.transcribe_detailed(
+            audio, filename=filename, content_type=content_type
+        ).text
+
+    def transcribe_detailed(
+        self, audio: bytes, *, filename: str, content_type: str
+    ) -> TranscriptionResult:
+        """Transcribe audio locally and return text, word timings, and metadata."""
         del filename
         validate_audio(audio, content_type)
         try:
@@ -326,15 +429,15 @@ class LocalSpeechToTextProvider:
                     "No audio was found in the recording. Record a response or type your answer."
                 )
             try:
-                transcript = self._transcribe_decoded(model, decoded_audio)
+                transcript, words, info = self._transcribe_decoded(model, decoded_audio)
                 self.actual_device = device
             except SpeechToTextError:
                 raise
             except Exception:
                 if self.config.device != "auto" or device != "cuda":
                     raise
-                model, _, _ = self._model_loader(self.config.model_size, "cpu")
-                transcript = self._transcribe_decoded(model, decoded_audio)
+                model, device, _ = self._model_loader(self.config.model_size, "cpu")
+                transcript, words, info = self._transcribe_decoded(model, decoded_audio)
                 self.actual_device = "cpu"
                 _LOADED_LOCAL_DEVICES[(self.config.model_size, "auto")] = "cpu"
         except SpeechToTextError:
@@ -348,12 +451,63 @@ class LocalSpeechToTextProvider:
             raise EmptyAudioError(
                 "No speech was recognized. Try a clearer or longer recording, or type your answer."
             )
-        return transcript
+        duration_seconds = float(
+            getattr(info, "duration", decoded_audio.size / 16000)
+        )
+        language = getattr(info, "language", None)
+        if not language:
+            language = "" if self.config.language == "auto" else self.config.language
+        language_probability = float(getattr(info, "language_probability", 0.0))
+        return TranscriptionResult(
+            text=transcript,
+            words=words,
+            duration_seconds=duration_seconds,
+            language=language,
+            language_probability=language_probability,
+            device=self.actual_device,
+        )
 
-    @staticmethod
-    def _transcribe_decoded(model: WhisperModelLike, audio: object) -> str:
-        segments, _ = model.transcribe(audio, beam_size=5)
-        return " ".join(segment.text.strip() for segment in segments).strip()
+    def _transcribe_decoded(
+        self, model: WhisperModelLike, audio: object
+    ) -> tuple[str, tuple[TranscriptWord, ...], _TranscriptionInfo]:
+        options: dict[str, object] = {
+            "beam_size": 5,
+            "word_timestamps": True,
+            "language": None if self.config.language == "auto" else self.config.language,
+            "vad_filter": self.config.vad_filter,
+            "hotwords": self.config.hotwords or None,
+            "initial_prompt": self.config.initial_prompt or None,
+        }
+        try:
+            parameters = inspect.signature(model.transcribe).parameters
+        except (TypeError, ValueError):
+            parameters = None
+        if parameters is not None:
+            if not any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            ):
+                options = {
+                    name: value for name, value in options.items() if name in parameters
+                }
+        segments, info = model.transcribe(audio, **options)
+        segments = tuple(segments)
+        transcript = " ".join(
+            segment_text
+            for segment_text in (segment.text.strip() for segment in segments)
+            if segment_text
+        )
+        words = tuple(
+            TranscriptWord(
+                text=word.word,
+                start=float(word.start),
+                end=float(word.end),
+                probability=float(word.probability),
+            )
+            for segment in segments
+            for word in (getattr(segment, "words", None) or ())
+        )
+        return transcript, words, info
 
 
 def create_speech_to_text_provider(
@@ -382,6 +536,15 @@ class OpenAISpeechToTextProvider:
         self._client_factory = client_factory
 
     def transcribe(self, audio: bytes, *, filename: str, content_type: str) -> str:
+        """Transcribe audio through OpenAI and return only its recognized text."""
+        return self.transcribe_detailed(
+            audio, filename=filename, content_type=content_type
+        ).text
+
+    def transcribe_detailed(
+        self, audio: bytes, *, filename: str, content_type: str
+    ) -> TranscriptionResult:
+        """Transcribe through OpenAI; word and local-device metadata are unavailable."""
         validate_audio(audio, content_type)
         normalized_content_type = content_type.split(";", 1)[0].strip().lower()
         try:
@@ -406,7 +569,14 @@ class OpenAISpeechToTextProvider:
                 raise EmptyAudioError(
                     "No speech was recognized. Try a clearer or longer recording, or type your answer."
                 )
-            return transcript.strip()
+            return TranscriptionResult(
+                text=transcript.strip(),
+                words=(),
+                duration_seconds=0.0,
+                language="",
+                language_probability=0.0,
+                device="remote",
+            )
         except SpeechToTextError:
             raise
         except Exception as error:

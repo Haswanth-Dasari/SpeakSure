@@ -10,7 +10,7 @@ SpeakSure helps people build confidence in English communication through realist
 - Without an API key, the app clearly labels and cycles through curated scripted prompts for each practice mode. If an AI request fails, retry it or switch to scripted prompts; the submitted answer remains recorded once and the selected session configuration is preserved.
 - Record a response in the browser, transcribe it locally by default, and review or edit the recognized text before submitting. Typed answers remain available. OpenAI transcription remains available as an explicitly selected backend.
 
-The chosen duration is a session setting and does not enforce a timer. Audio is handled in memory for transcription and is not permanently stored by SpeakSure. Local audio inference stays on this computer; first use downloads the selected model from Hugging Face and therefore needs internet access. Text-to-speech and speech/emotion analysis are not implemented.
+The chosen duration is a session setting and does not enforce a timer. Audio is handled in memory for transcription and is not permanently stored by SpeakSure. Local audio inference stays on this computer; first use downloads the selected model from Hugging Face and therefore needs internet access. Speech synthesis uses Piper (GPL-licensed engine); each voice model has its own license, so see its model card on Hugging Face. Speech/emotion analysis is not implemented.
 
 ## Setup on Windows PowerShell
 
@@ -21,6 +21,12 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
+
+SpeakSure's requirements install spaCy and the pinned `en_core_web_sm` model
+wheel; this one-time setup needs internet access. Grammar feedback then runs
+offline, uses the CPU, and does not need Java or an API key. If either dependency
+is missing after setup, the report marks grammar analysis unavailable instead
+of attempting a download at runtime.
 
 Local transcription is the default and does not need `OPENAI_API_KEY` or OpenAI API credits. Configure it in the project-root `.env` or process environment:
 
@@ -38,10 +44,22 @@ To use paid API transcription instead, explicitly select `SPEECH_TO_TEXT_PROVIDE
 
 SpeakSure loads the project-root `.env` independently of the shell's current directory, without overriding values already set in the process environment. `.env.example` contains placeholders/defaults and is not loaded automatically. Restart Streamlit after changing configuration.
 
+## Configuration precedence
+
+For every setting, SpeakSure uses the process environment first, then the
+project-root `.env`, then the built-in default. For example, this PowerShell
+override selects `tiny` for one run of the transcription demo:
+
+```powershell
+$env:SPEECH_TO_TEXT_MODEL_SIZE = "tiny"
+python scripts/transcribe_demo.py .\harvard.wav
+Remove-Item Env:SPEECH_TO_TEXT_MODEL_SIZE
+```
+
 Run this safe diagnostic from PowerShell in the project root. It reports the selected provider/model, device available to CTranslate2, initialized device, and dependency presence. Before the first successful transcription in that Python process, `actual_device` is `not-initialized`; the app also displays the device used after local inference. The diagnostic never prints the API key:
 
 ```powershell
-Set-Location 'C:\Users\Haswanth\Desktop\NLP_Project\SpeakSure'
+Set-Location '<project-root>'
 & '.\.venv\Scripts\python.exe' -c "import json; from src.speaksure.speech_to_text import diagnose_transcription_configuration; print(json.dumps(diagnose_transcription_configuration(), indent=2))"
 ```
 
@@ -50,7 +68,7 @@ Microphone recording uses Streamlit's built-in `st.audio_input` and requires a s
 Install dependencies in the project virtual environment:
 
 ```powershell
-Set-Location 'C:\Users\Haswanth\Desktop\NLP_Project\SpeakSure'
+Set-Location '<project-root>'
 & '.\.venv\Scripts\python.exe' -m pip install -r requirements.txt
 & '.\.venv\Scripts\python.exe' -m streamlit run app.py
 ```
@@ -66,3 +84,38 @@ python -m pytest -q
 ```
 
 Provider unit tests mock faster-whisper and the OpenAI SDK. They do not download model weights, make network calls, require real API credentials, or execute on a GPU. Browser microphone permission, actual model download/inference, and hardware device selection still need to be checked manually on the target machine.
+
+To try a typed-text HR mock interview with the configured Groq language model, run `python scripts/interviewer_demo.py --questions 3 --name Haswanth`. Use `--follow-ups`, `--role`, `--seed`, or `--no-save` to adjust the session; by default, completed and interrupted sessions are saved under `data/sessions`.
+
+## ASR benchmark (E1)
+
+Copy `data/eval/prompts.example.txt` to `data/eval/prompts.txt`, then record a prompted set or spontaneous answers.
+```powershell
+Copy-Item data/eval/prompts.example.txt data/eval/prompts.txt
+python scripts/record_eval_clips.py --prompts data/eval/prompts.txt
+python scripts/record_eval_clips.py --free --seed 17
+python scripts/asr_benchmark.py --manifest data/eval/manifest.csv --models base,small,medium,large-v3 --device cuda --language en --hotwords "SpeakSure, Northbridge" --group-by model,input_device,category
+```
+The recorder stores the selected microphone and prompt category, and `e` lets you correct the reference to what was actually spoken.
+The benchmark writes a non-overwriting CSV plus a Markdown summary with reference-word counts and per-clip aligned errors; CUDA/device mismatches are excluded.
+
+## Web app
+
+Run the local API from the project directory:
+```powershell
+python scripts/run_web.py
+```
+It binds to `127.0.0.1:8000`; `--port 8010` changes the port. Remote binding requires `--host 0.0.0.0 --allow-remote`.
+The browser frontend is pending; the API accepts browser-recorded raw `audio/wav` uploads.
+Endpoints: `GET /api/health`, `POST /api/sessions`, `GET /api/sessions`, `POST /api/sessions/{id}/answer`, `POST /api/sessions/{id}/finish`.
+Also: `GET /api/sessions/{id}/status`, `GET /api/sessions/{id}/audio/{name}.wav`, and `GET /report/{id}`.
+
+## Content scoring evaluation (E3)
+
+LLM content scores vary between runs; use distinct `--out` names for separate experiments.
+```powershell
+python scripts/analyze_session.py data/sessions/session.json --content --repeat 5 --pause-seconds 1 --out data/analysis/session_e3_a.json
+python scripts/content_stability.py data/analysis/session_e3_a.json
+python scripts/eval_content.py data/eval/ratings.csv data/analysis/session_e3_a.json data/analysis/session_e3_b.json
+```
+Copy `data/eval/ratings.example.csv` and enter one independent 1-5 rating per question.
