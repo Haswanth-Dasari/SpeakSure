@@ -148,6 +148,21 @@ def _print_report(session: InterviewSession) -> None:
     ):
         print(f"{field}: {_display(delivery_summary.get(field))}")
 
+    print("Grammar by turn")
+    for turn in session.turns:
+        grammar = turn.analysis.get("grammar", {})
+        print(
+            f"turn {turn.index}: status={_display(grammar.get('status'))} "
+            f"words={_display(grammar.get('word_count_checked'))} "
+            f"errors={_display(grammar.get('error_count'))} "
+            f"errors_per_100_words={_display(grammar.get('errors_per_100_words'))}"
+        )
+        for issue in grammar.get("issues", []):
+            print(
+                f"  {issue.get('category')}: {issue.get('span_text')} -> "
+                f"{issue.get('suggestion')} (word {issue.get('word_index')})"
+            )
+
 
 def _display(value: object) -> str:
     """Render missing values as a dash and numbers compactly."""

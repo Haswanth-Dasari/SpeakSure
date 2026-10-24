@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from html import escape
-from statistics import mean
 from typing import Any
+
+from .aggregate import aggregate_group_delivery
 
 
 def small_bar_chart(
@@ -78,19 +79,19 @@ def small_bar_chart(
 
 
 def words_per_minute_chart(analyzed: dict[str, Any]) -> str:
-    """Render a question-group chart of mean transcript words per minute."""
+    """Render a question-group chart of pooled transcript words per minute."""
     return small_bar_chart(analyzed, "words_per_minute", "Words per minute")
 
 
 def audio_pause_ratio_chart(analyzed: dict[str, Any]) -> str:
-    """Render a question-group chart of mean audio pause ratio."""
+    """Render a question-group chart of pooled audio pause ratios."""
     return small_bar_chart(
         analyzed, "pause_ratio", "Audio pause ratio", source="audio_delivery"
     )
 
 
 def level_variation_chart(analyzed: dict[str, Any]) -> str:
-    """Render a question-group chart of mean audio level variation in dB."""
+    """Render a question-group chart of voiced-time-weighted level variation."""
     return small_bar_chart(
         analyzed, "level_std_db", "Audio level variation (dB)", source="audio_delivery"
     )
@@ -102,14 +103,11 @@ def _group_value(
     metric: str,
     source: str,
 ) -> float | None:
-    """Calculate the mean available metric for the turns in one group."""
-    metric_values: list[float] = []
+    """Calculate a pooled metric for the turns in one group."""
+    group_turns: list[dict[str, Any]] = []
     for turn_index in group.get("turn_indexes", []):
         if not isinstance(turn_index, int) or not 1 <= turn_index <= len(turns):
             continue
-        metrics = turns[turn_index - 1].get("analysis", {}).get(source, {})
-        value = metrics.get(metric)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            continue
-        metric_values.append(float(value))
-    return mean(metric_values) if metric_values else None
+        group_turns.append(turns[turn_index - 1])
+    value = aggregate_group_delivery(group_turns).get(metric)
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None

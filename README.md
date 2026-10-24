@@ -22,6 +22,12 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
+SpeakSure's requirements install spaCy and the pinned `en_core_web_sm` model
+wheel; this one-time setup needs internet access. Grammar feedback then runs
+offline, uses the CPU, and does not need Java or an API key. If either dependency
+is missing after setup, the report marks grammar analysis unavailable instead
+of attempting a download at runtime.
+
 Local transcription is the default and does not need `OPENAI_API_KEY` or OpenAI API credits. Configure it in the project-root `.env` or process environment:
 
 ```dotenv

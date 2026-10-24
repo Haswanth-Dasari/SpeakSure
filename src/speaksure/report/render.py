@@ -3,17 +3,39 @@
 from __future__ import annotations
 
 from html import escape
-from statistics import mean
 from typing import Any, Mapping
 
 from ..analysis.question_labels import resolve_asked_questions
 from ..question_bank import BankQuestion
 from ..session_log import InterviewSession
+from .aggregate import aggregate_group_delivery
 from .charts import audio_pause_ratio_chart, level_variation_chart, words_per_minute_chart
-from .coaching import CONTENT_HIGH, CONTENT_LOW, Finding, build_findings
+from .coaching import (
+    CONTENT_HIGH,
+    CONTENT_LOW,
+    GRAMMAR_CATEGORY_LABELS,
+    MAX_FINDINGS_PER_QUESTION,
+    Finding,
+    TOPIC_LABELS,
+    build_findings,
+)
 
 # Word probabilities below this threshold receive visual transcript highlighting.
 LOW_CONFIDENCE_WORD_PROBABILITY = 0.5
+SCORE_VARIATION_NOTE = (
+    "Approximate: scores from a language model can vary by about 10 points between runs."
+)
+
+_UNRATED_SENTENCES = {
+    "too_short_or_empty": "the answer was too short to rate",
+    "unknown_question": "the question could not be identified",
+    "llm_error": (
+        "the language model was unavailable or returned unusable output for this question"
+    ),
+    "invalid_output": (
+        "the language model was unavailable or returned unusable output for this question"
+    ),
+}
 
 _CSS = """
 body{font:16px/1.5 system-ui,sans-serif;color:#172033;margin:0;background:#f4f6fa}
@@ -103,6 +125,7 @@ def render_report(
                     turns,
                     bank_by_id,
                     content_available,
+                    session_analysis,
                 )
             )
     document.extend(
@@ -119,6 +142,7 @@ def render_report(
             "<li>Scores from a language model vary a little between runs.</li>",
             "<li>Pauses are measured from the audio, not from word timestamps.</li>",
             "<li>Filler words may be under-detected because recognition tends to drop them.</li>",
+            "<li>Grammar feedback uses a small offline rule set; it may miss context or reflect transcript recognition errors.</li>",
             "<li>No emotion is detected.</li>",
             "<li>Thresholds in the coaching rules are heuristics.</li>",
             "</ul></section>",
@@ -130,9 +154,31 @@ def render_report(
 
 
 def _append_summary(document: list[str], findings: list[Finding]) -> None:
-    """Append up to three prioritized strengths and priorities."""
+    """Append up to three prioritized findings of each kind with group diversity."""
     for kind, heading in (("strength", "Strengths"), ("priority", "Priorities")):
-        selected = [finding for finding in findings if finding.kind == kind][:3]
+        candidates = [finding for finding in findings if finding.kind == kind]
+        selected: list[Finding] = []
+        selected_indexes: set[int] = set()
+        group_counts: dict[int | str, int] = {}
+        for index, finding in enumerate(candidates):
+            if len(selected) == 3:
+                break
+            key: int | str = (
+                finding.group_key
+                if finding.group_key is not None
+                else f"ungrouped:{index}"
+            )
+            if group_counts.get(key, 0) >= MAX_FINDINGS_PER_QUESTION:
+                continue
+            selected.append(finding)
+            selected_indexes.add(index)
+            group_counts[key] = group_counts.get(key, 0) + 1
+        if len(selected) < 3:
+            for index, finding in enumerate(candidates):
+                if len(selected) == 3:
+                    break
+                if index not in selected_indexes:
+                    selected.append(finding)
         document.append(f"<h3>{heading}</h3>")
         if not selected:
             document.append("<p>None identified.</p>")
@@ -155,6 +201,7 @@ def _render_group(
     turns: list[dict[str, Any]],
     bank_by_id: Mapping[str, BankQuestion],
     content_available: bool,
+    session_analysis: dict[str, Any],
 ) -> str:
     """Render question, transcripts, rubric results, and delivery metrics."""
     turn_indexes = [
@@ -165,11 +212,12 @@ def _render_group(
     question_id = group.get("main_question_id")
     question = bank_by_id.get(question_id) if isinstance(question_id, str) else None
     question_text = question.text if question is not None else "Question not identified"
+    topic = _topic_label(question_id)
     reliability = _as_text(group.get("asr_reliability", "unknown")).lower()
     badge_class = reliability if reliability in {"low", "medium", "high"} else ""
     html_parts = [
         f'<article class="card"><h3>Question {display_index}: {escape(question_text)}</h3>',
-        f"<p>Question ID: {escape(_as_text(question_id or 'unknown'))}</p>",
+        f'<p class="muted">Topic: {escape(topic)}</p>',
         f'<p><span class="badge {badge_class}">Recognition confidence: {escape(reliability)}</span></p>',
     ]
     labels = _turn_labels(group, turns)
@@ -194,9 +242,18 @@ def _render_group(
                     f"<p>{label}: {_rating(group.get(field_name))} / 5</p>"
                 )
             score = _number(group.get("content_score"))
+            score_variation = _score_variation(session_analysis, question_id)
+            variation_text = (
+                score_variation
+                if score_variation is not None
+                else SCORE_VARIATION_NOTE
+                if not isinstance(session_analysis.get("content_runs"), list)
+                else ""
+            )
             html_parts.append(
                 f"<p>Content score: {_format_number(score)} / 100 "
-                f"(<strong>{_content_band(score)}</strong>)</p>"
+                f"(<strong>{_content_band(score)}</strong>)"
+                f"{f' <span class=\"muted\">{escape(variation_text)}</span>' if variation_text else ''}</p>"
             )
             html_parts.append("<h4>Rubric hints</h4><ul>")
             for entry in group.get("coverage", []):
@@ -226,14 +283,121 @@ def _render_group(
                 ]
             )
         else:
-            reason = _as_text(group.get("reason", "This question was not rated."))
-            html_parts.append(f"<p>Not rated: {escape(reason)}</p>")
+            category = _reason_category(group)
+            sentence = _UNRATED_SENTENCES.get(category, "the answer could not be rated")
+            category_note = f" ({escape(category)})" if category else ""
+            html_parts.append(
+                f"<p>Not rated: {escape(sentence)}{category_note}.</p>"
+            )
     else:
         html_parts.append("<p>Content analysis was not run.</p>")
 
+    html_parts.append(_grammar_block(turn_indexes, turns))
+    html_parts.append(_group_metrics_table(turn_indexes, turns))
     html_parts.append(_answer_metrics_table(turn_indexes, turns))
     html_parts.append("</article>")
     return "".join(html_parts)
+
+
+def _grammar_block(
+    turn_indexes: list[int], turns: list[dict[str, Any]]
+) -> str:
+    """Render pooled grammar feedback and readable unavailable states."""
+    group_turns = [turns[index - 1] for index in turn_indexes]
+    results = [
+        turn.get("analysis", {}).get("grammar")
+        for turn in group_turns
+        if isinstance(turn.get("analysis", {}).get("grammar"), dict)
+    ]
+    if not results:
+        return (
+            "<h4>Grammar</h4><p>Grammar analysis results were not saved "
+            "for these answers.</p>"
+        )
+
+    statuses = [result.get("status") for result in results]
+    aggregate = aggregate_group_delivery(group_turns)
+    if aggregate["grammar_word_count_checked"]:
+        count = int(aggregate["grammar_error_count"])
+        checked = int(aggregate["grammar_word_count_checked"])
+        rate = _number(aggregate["grammar_errors_per_100_words"])
+        parts = [
+            "<h4>Grammar</h4>",
+            f"<p>{_format_number(rate)} detected errors per 100 checked words "
+            f"({count} issue(s) across {checked} checked words).</p>",
+        ]
+        if count == 0:
+            parts.append("<p>No grammar issues were detected in the checked words.</p>")
+            parts.append("<p>Top categories: none.</p>")
+        else:
+            category_counts = aggregate["grammar_category_counts"]
+            top_categories = sorted(
+                category_counts.items(), key=lambda item: (-item[1], item[0])
+            )[:3]
+            category_text = ", ".join(
+                f"{escape(GRAMMAR_CATEGORY_LABELS.get(category, category.replace('_', ' ')))} ({amount})"
+                for category, amount in top_categories
+            )
+            parts.append(f"<p>Top categories: {category_text}.</p>")
+            examples = [
+                issue
+                for result in results
+                if result.get("status") == "ok"
+                for issue in result.get("issues", [])
+                if isinstance(issue, dict)
+            ][:3]
+            if examples:
+                parts.append("<ul>")
+                for issue in examples:
+                    category = issue.get("category")
+                    label = GRAMMAR_CATEGORY_LABELS.get(
+                        category, category.replace("_", " ")
+                    ) if isinstance(category, str) else "Grammar"
+                    parts.append(
+                        f"<li><strong>{escape(label)}</strong>: "
+                        f"&quot;{escape(_as_text(issue.get('span_text')))}&quot; "
+                        f"-> &quot;{escape(_as_text(issue.get('suggestion')))}&quot;. "
+                        f"{escape(_as_text(issue.get('explanation')))}</li>"
+                    )
+                parts.append("</ul>")
+        if "grammar_unavailable" in statuses:
+            parts.append(
+                "<p>Some answers could not be checked because the offline "
+                "grammar model was unavailable.</p>"
+            )
+        if "too_short" in statuses:
+            parts.append(
+                "<p>Short answers were skipped because they had fewer than "
+                "5 checked words.</p>"
+            )
+        return "".join(parts)
+
+    if "grammar_unavailable" in statuses:
+        message = next(
+            (
+                result.get("message")
+                for result in results
+                if result.get("status") == "grammar_unavailable"
+                and isinstance(result.get("message"), str)
+                and result.get("message")
+            ),
+            "Install spaCy and its en_core_web_sm model to enable offline grammar checks.",
+        )
+        if "too_short" in statuses:
+            message = (
+                f"{message} Short answers were also skipped because they had "
+                "fewer than 5 checked words."
+            )
+        return f"<h4>Grammar</h4><p>{escape(message)}</p>"
+    if statuses and all(status == "too_short" for status in statuses):
+        return (
+            "<h4>Grammar</h4><p>Grammar analysis was skipped because all "
+            "answers had fewer than 5 checked words.</p>"
+        )
+    return (
+        "<h4>Grammar</h4><p>No grammar results were available for these "
+        "answers.</p>"
+    )
 
 
 def _answer_metrics_table(turn_indexes: list[int], turns: list[dict[str, Any]]) -> str:
@@ -261,6 +425,32 @@ def _answer_metrics_table(turn_indexes: list[int], turns: list[dict[str, Any]]) 
         parts.append("</tr>")
     parts.append("</tbody></table>")
     return "".join(parts)
+
+
+def _group_metrics_table(turn_indexes: list[int], turns: list[dict[str, Any]]) -> str:
+    """Render pooled delivery metrics while retaining the per-answer table."""
+    group_turns = [turns[index - 1] for index in turn_indexes]
+    metrics = aggregate_group_delivery(group_turns)
+    columns = (
+        ("Total words", "total_words"),
+        ("Words per minute", "words_per_minute"),
+        ("Pause count", "pause_count"),
+        ("Longest pause (s)", "longest_pause_seconds"),
+        ("Pause ratio", "pause_ratio"),
+        ("Level variation (dB)", "level_std_db"),
+        ("Fillers per 100 words", "fillers_per_100_words"),
+        ("Hedges per 100 words", "hedges_per_100_words"),
+        ("Thinking time (s)", "thinking_time_seconds"),
+    )
+    cells = "".join(
+        f"<td>{escape(_format_number(_number(metrics.get(key))))}</td>"
+        for _, key in columns
+    )
+    headers = "".join(f"<th scope=\"col\">{label}</th>" for label, _ in columns)
+    return (
+        '<table><caption>Group delivery summary</caption><thead><tr>'
+        f"{headers}</tr></thead><tbody><tr>{cells}</tr></tbody></table>"
+    )
 
 
 def _transcript_html(answer: object) -> str:
@@ -379,6 +569,51 @@ def _format_number(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _topic_label(question_id: object) -> str:
+    """Return a reader-facing topic label for a question group."""
+    if isinstance(question_id, str) and question_id:
+        return TOPIC_LABELS.get(question_id, question_id)
+    return "unknown"
+
+
+def _reason_category(group: dict[str, Any]) -> str:
+    """Return an unrated reason or error category."""
+    for key in ("reason", "error"):
+        value = group.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _score_variation(
+    session_analysis: dict[str, Any], question_id: object
+) -> str | None:
+    """Format the available per-question score range across saved content runs."""
+    runs = session_analysis.get("content_runs")
+    if not isinstance(runs, list):
+        return None
+    scores: list[float] = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        groups = run.get("content_by_question")
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict) or group.get("main_question_id") != question_id:
+                continue
+            score = _number(group.get("content_score"))
+            if score is not None:
+                scores.append(score)
+                break
+    if not scores:
+        return None
+    return (
+        f"range {_format_number(min(scores))}-{_format_number(max(scores))} "
+        f"over {len(scores)} runs"
+    )
 
 
 def _rating(value: object) -> str:

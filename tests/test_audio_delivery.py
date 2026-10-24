@@ -156,6 +156,7 @@ def test_session_analysis_adds_audio_metrics_without_mutating_input(tmp_path: Pa
     }
     assert result.analysis["fluency_summary"]["analysis_versions"] == {
         "fluency": 1,
+        "grammar": 1,
         "transcript_quality": 1,
         "audio_delivery": 1,
     }

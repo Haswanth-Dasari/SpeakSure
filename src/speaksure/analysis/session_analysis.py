@@ -13,6 +13,7 @@ from ..session_log import InterviewSession, Turn
 from .audio_delivery import analyze_audio_delivery
 from .content import ASR_HIGH, ASR_LOW, analyze_content
 from .fluency import analyze_fluency
+from .grammar import analyze_grammar
 from .question_labels import resolve_asked_questions
 from .transcript_quality import analyze_transcript_quality
 
@@ -30,11 +31,13 @@ def analyze_session(
     audio_deliveries = []
     for turn in analyzed.turns:
         fluency = analyze_fluency(turn.answer, turn.thinking_time_seconds)
+        grammar = analyze_grammar(turn.answer)
         transcript_quality = analyze_transcript_quality(turn.answer)
         audio_delivery = analyze_audio_delivery(
             turn.audio_path, int(fluency["word_count"]), audio_root
         )
         turn.analysis["fluency"] = fluency
+        turn.analysis["grammar"] = grammar
         turn.analysis["transcript_quality"] = transcript_quality
         turn.analysis["audio_delivery"] = audio_delivery
         fluencies.append(fluency)
@@ -46,6 +49,7 @@ def analyze_session(
     thinking_time_by_turn = [metric["thinking_time_seconds"] for metric in fluencies]
     analysis_versions = {
         "fluency": 1,
+        "grammar": 1,
         "transcript_quality": 1,
         "audio_delivery": 1,
     }

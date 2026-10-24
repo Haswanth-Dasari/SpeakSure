@@ -30,6 +30,7 @@ def test_cli_writes_analysis_separately_and_leaves_original_untouched(
     assert output_path.is_file()
     analyzed = InterviewSession.load(output_path)
     assert "fluency" in analyzed.turns[0].analysis
+    assert analyzed.turns[0].analysis["grammar"]["status"] == "too_short"
     assert "transcript_quality" in analyzed.turns[0].analysis
     assert "turn words speech_s wpm audio_pauses audio_longest audio_pause_ratio" in captured.out
     assert "ASR-timestamp pauses vs audio pauses" in captured.out

@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
 from ..analysis.content import BEHAVIOURAL_QUESTION_IDS
+from ..analysis.question_labels import resolve_asked_questions
 from ..question_bank import BankQuestion
+from ..session_log import InterviewSession
+from .aggregate import aggregate_group_delivery
 
 # Content scores below this value create the strongest content priority.
 CONTENT_LOW = 40
@@ -39,10 +42,38 @@ SHORT_ANSWER_WORDS = 25
 THINKING_LONG = 5.0
 # Minimum number of answered question groups needed for a low-hedge strength.
 MIN_QUESTIONS_FOR_HEDGE_STRENGTH = 2
+# Each answer group must have enough words to estimate hedging meaningfully.
+MIN_WORDS_PER_GROUP_FOR_HEDGE_STRENGTH = 20
+# Eligible answer groups together must have enough words for a stable estimate.
+MIN_WORDS_FOR_HEDGE_STRENGTH = 40
+# Summary findings per question group before other groups are preferred.
+MAX_FINDINGS_PER_QUESTION = 2
 # Specificity scores at or below this value merit a concrete-example priority.
 CONTENT_SPECIFICITY_LOW = 2
+# Fewer than one detected issue per 100 checked words is a cautious strength threshold;
+# require 20 checked words so a very short answer cannot earn a rate-based strength.
+GRAMMAR_LOW_RATE_PER_100_WORDS = 1.0
+GRAMMAR_MIN_WORDS_FOR_STRENGTH = 20
+# Question identifiers are presented as concise, reader-facing topic labels.
+TOPIC_LABELS = {
+    "intro": "introduction",
+    "motivation": "motivation",
+    "strength": "strengths",
+    "weakness": "weaknesses",
+    "teamwork": "teamwork",
+    "conflict": "disagreement",
+    "challenge": "problem solving",
+    "mistake": "mistakes",
+    "pressure": "pressure",
+    "goals": "career goals",
+}
+GRAMMAR_CATEGORY_LABELS = {
+    "subject_verb_agreement": "subject-verb agreement",
+    "article": "article use",
+    "verb_tense": "simple verb tense",
+}
 FindingKind = Literal["strength", "priority"]
-FindingArea = Literal["content", "delivery", "transcript"]
+FindingArea = Literal["content", "delivery", "transcript", "grammar"]
 
 
 @dataclass(frozen=True)
@@ -54,6 +85,7 @@ class Finding:
     area: FindingArea
     text: str
     evidence: str
+    group_key: int | str | None = None
 
 
 def build_findings(
@@ -63,6 +95,9 @@ def build_findings(
     turns = analyzed.get("turns", [])
     session_analysis = analyzed.get("analysis", {})
     groups = session_analysis.get("content_by_question", [])
+    if not isinstance(groups, list):
+        groups = []
+    grammar_groups = groups or _inferred_groups(analyzed, bank_by_id)
     findings: list[tuple[int, int, Finding]] = []
     group_index_by_turn = {
         turn_index: index
@@ -73,7 +108,8 @@ def build_findings(
     for group_position, group in enumerate(groups):
         question_id = group.get("main_question_id")
         question = bank_by_id.get(question_id) if isinstance(question_id, str) else None
-        question_name = question.text if question is not None else str(question_id or "Unknown question")
+        topic = _topic_label(question_id)
+        question_name = f"On the {topic} question,"
         turn_indexes = group.get("turn_indexes", [])
         position = min(turn_indexes, default=group_position + 1)
         if group.get("asr_reliability") == "low":
@@ -84,8 +120,22 @@ def build_findings(
                     "priority",
                     3,
                     "transcript",
-                    f"Recognition for {question_name} was unreliable, so its scores may be understated.",
+                    f"{question_name} speech recognition was unreliable, so its scores may be understated.",
                     f"Mean word probability: {_display(group.get('asr_mean_probability'))}.",
+                    group_position,
+                ),
+            )
+        if group.get("rated") is not True and _reason_category(group) == "too_short_or_empty":
+            _append_finding(
+                findings,
+                position,
+                Finding(
+                    "priority",
+                    2,
+                    "content",
+                    f"{question_name} your answer was too short to rate; give a fuller answer with a concrete example.",
+                    "The answer did not meet the minimum length for content rating.",
+                    group_position,
                 ),
             )
         if group.get("rated") is not True:
@@ -124,8 +174,9 @@ def build_findings(
                     "priority",
                     3,
                     "content",
-                    f"For {question_name}, include these points next time: {uncovered_text}.",
+                    f"{question_name} include these points next time: {uncovered_text}.",
                     f"Content score: {score:.1f}/100.",
+                    group_position,
                 ),
             )
         elif (
@@ -140,8 +191,9 @@ def build_findings(
                     "priority",
                     2,
                     "content",
-                    f"For {question_name}, add the uncovered points: {uncovered_text}.",
+                    f"{question_name} add the uncovered points: {uncovered_text}.",
                     f"Content score: {score:.1f}/100.",
+                    group_position,
                 ),
             )
         elif score is not None and score >= CONTENT_HIGH:
@@ -164,8 +216,9 @@ def build_findings(
                         "strength",
                         2,
                         "content",
-                        f"For {question_name}, you clearly addressed a key point.",
+                        f"{question_name} you clearly addressed a key point.",
                         verified_quote,
+                        group_position,
                     ),
                 )
 
@@ -182,8 +235,9 @@ def build_findings(
                     "priority",
                     2,
                     "content",
-                    f"For {question_name}, add concrete examples, numbers or outcomes.",
+                    f"{question_name} add concrete examples, numbers or outcomes.",
                     f"Specificity rating: {specificity}/5.",
+                    group_position,
                 ),
             )
         star = group.get("star")
@@ -201,86 +255,177 @@ def build_findings(
                         "priority",
                         2,
                         "content",
-                        f"For {question_name}, add the missing STAR parts: {', '.join(missing_parts)}.",
+                        f"{question_name} add the missing STAR parts: {', '.join(missing_parts)}.",
                         "STAR checklist.",
+                        group_position,
                     ),
                 )
 
-    low_hedge_questions: list[tuple[int, str]] = []
+    for group_position, group in enumerate(grammar_groups):
+        group_turns = _group_turns(group, turns)
+        metrics = aggregate_group_delivery(group_turns)
+        checked_words = int(metrics["grammar_word_count_checked"])
+        error_count = int(metrics["grammar_error_count"])
+        rate = _number(metrics["grammar_errors_per_100_words"])
+        turn_indexes = group.get("turn_indexes", [])
+        position = min(
+            (index for index in turn_indexes if isinstance(index, int)),
+            default=group_position + 1,
+        )
+        group_key = group_position
+        phrase = f"On the {_topic_label(group.get('main_question_id'))} question,"
+
+        if (
+            checked_words >= GRAMMAR_MIN_WORDS_FOR_STRENGTH
+            and rate is not None
+            and rate <= GRAMMAR_LOW_RATE_PER_100_WORDS
+        ):
+            _append_finding(
+                findings,
+                position,
+                Finding(
+                    "strength",
+                    1,
+                    "grammar",
+                    f"{phrase} your checked grammar error rate was low at {rate:.1f} per 100 words.",
+                    f"{error_count} detected issues across {checked_words} checked words.",
+                    group_key,
+                ),
+            )
+
+        category_counts = metrics["grammar_category_counts"]
+        if error_count and category_counts:
+            category, category_count = min(
+                category_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+            example = next(
+                (
+                    issue
+                    for turn in group_turns
+                    for issue in _grammar_issues(turn)
+                    if issue.get("category") == category
+                ),
+                None,
+            )
+            if example is not None:
+                label = GRAMMAR_CATEGORY_LABELS.get(
+                    category, category.replace("_", " ")
+                )
+                span = _text(example.get("span_text"))
+                suggestion = _text(example.get("suggestion"))
+                explanation = _text(example.get("explanation"))
+                _append_finding(
+                    findings,
+                    position,
+                    Finding(
+                        "priority",
+                        2,
+                        "grammar",
+                        f"{phrase} review {label}; it was the most frequent detected category ({category_count} issue(s)).",
+                        f'Example from your answer: "{span}" -> "{suggestion}". {explanation}',
+                        group_key,
+                    ),
+                )
+
+    low_hedge_questions: list[tuple[int, int, str]] = []
+    eligible_hedge_words = 0
+    for group_position, group in enumerate(groups):
+        group_turns = _group_turns(group, turns)
+        delivery = aggregate_group_delivery(group_turns)
+        group_words = delivery["total_words"]
+        group_hedges = sum(
+            max(0, int(_number(turn.get("analysis", {}).get("fluency", {}).get("hedge_count")) or 0))
+            for turn in group_turns
+        )
+        if group_words >= MIN_WORDS_PER_GROUP_FOR_HEDGE_STRENGTH:
+            eligible_hedge_words += group_words
+            group_rate = group_hedges * 100 / group_words
+            if group_rate <= HEDGES_LOW:
+                position = min(group.get("turn_indexes", [group_position + 1]))
+                low_hedge_questions.append(
+                    (position, group_position, str(group.get("main_question_id") or "question"))
+                )
+
+        topic = _topic_label(group.get("main_question_id"))
+        phrase = f"On the {topic} question,"
+        wpm = _number(delivery.get("words_per_minute"))
+        if wpm is not None and wpm > WPM_FAST:
+            _append_finding(
+                findings,
+                min(group.get("turn_indexes", [group_position + 1])),
+                Finding(
+                    "priority", 1, "delivery",
+                    f"{phrase} your pace was fast at {wpm:.0f} words per minute.",
+                    f"{wpm:.1f} words per minute.",
+                    group_position,
+                ),
+            )
+        elif wpm is not None and wpm < WPM_SLOW:
+            _append_finding(
+                findings,
+                min(group.get("turn_indexes", [group_position + 1])),
+                Finding(
+                    "priority", 1, "delivery",
+                    f"{phrase} your pace was slow at {wpm:.0f} words per minute.",
+                    f"{wpm:.1f} words per minute.",
+                    group_position,
+                ),
+            )
+        elif wpm is not None and WPM_STRENGTH_LOW <= wpm <= WPM_STRENGTH_HIGH:
+            _append_finding(
+                findings,
+                min(group.get("turn_indexes", [group_position + 1])),
+                Finding(
+                    "strength", 1, "delivery",
+                    f"{phrase} your pace was within the 120-160 words-per-minute range.",
+                    f"{wpm:.1f} words per minute.",
+                    group_position,
+                ),
+            )
+
+        pause_ratio = _number(delivery.get("pause_ratio"))
+        longest_pause = _number(delivery.get("longest_pause_seconds"))
+        if (pause_ratio is not None and pause_ratio > PAUSE_RATIO_HIGH) or (
+            longest_pause is not None and longest_pause >= LONG_SILENCE
+        ):
+            _append_finding(
+                findings,
+                min(group.get("turn_indexes", [group_position + 1])),
+                Finding(
+                    "priority", 2, "delivery",
+                    f"{phrase} manage pauses more deliberately.",
+                    f"Audio pause ratio: {_display(pause_ratio)}; longest pause: {_display(longest_pause)} seconds.",
+                    group_position,
+                ),
+            )
+
+        if group.get("rated") is True and group_words < SHORT_ANSWER_WORDS:
+            _append_finding(
+                findings,
+                min(group.get("turn_indexes", [group_position + 1])),
+                Finding(
+                    "priority", 2, "content",
+                    f"{phrase} your answer was very short.",
+                    f"{group_words} words.",
+                    group_position,
+                ),
+            )
+
     for turn_position, turn in enumerate(turns, start=1):
         turn_analysis = turn.get("analysis", {})
         fluency = turn_analysis.get("fluency", {})
-        audio = turn_analysis.get("audio_delivery", {})
         if not _turn_has_answer(turn):
             continue
-        word_count = fluency.get("word_count", 0)
         question_index = group_index_by_turn.get(turn_position)
         question_id = (
             groups[question_index].get("main_question_id")
             if question_index is not None
             else None
         )
-        question = bank_by_id.get(question_id) if isinstance(question_id, str) else None
-        question_name = question.text if question is not None else f"answer {turn_position}"
-
-        wpm = _number(fluency.get("words_per_minute"))
-        if wpm is not None and wpm > WPM_FAST:
-            _append_finding(
-                findings,
-                turn_position,
-                Finding(
-                    "priority",
-                    1,
-                    "delivery",
-                    f"Your pace on {question_name} was fast at {wpm:.0f} words per minute.",
-                    f"{wpm:.1f} words per minute.",
-                ),
-            )
-        elif wpm is not None and wpm < WPM_SLOW:
-            _append_finding(
-                findings,
-                turn_position,
-                Finding(
-                    "priority",
-                    1,
-                    "delivery",
-                    f"Your pace on {question_name} was slow at {wpm:.0f} words per minute.",
-                    f"{wpm:.1f} words per minute.",
-                ),
-            )
-        elif (
-            wpm is not None
-            and WPM_STRENGTH_LOW <= wpm <= WPM_STRENGTH_HIGH
-        ):
-            _append_finding(
-                findings,
-                turn_position,
-                Finding(
-                    "strength",
-                    1,
-                    "delivery",
-                    f"Your pace on {question_name} was within the 120-160 words-per-minute range.",
-                    f"{wpm:.1f} words per minute.",
-                ),
-            )
-
-        pause_ratio = _number(audio.get("pause_ratio"))
-        longest_pause = _number(audio.get("longest_pause_seconds"))
-        if (
-            (pause_ratio is not None and pause_ratio > PAUSE_RATIO_HIGH)
-            or (longest_pause is not None and longest_pause >= LONG_SILENCE)
-        ):
-            _append_finding(
-                findings,
-                turn_position,
-                Finding(
-                    "priority",
-                    2,
-                    "delivery",
-                    f"Manage pauses in your answer to {question_name} more deliberately.",
-                    f"Audio pause ratio: {_display(pause_ratio)}; longest pause: {_display(longest_pause)} seconds.",
-                ),
-            )
+        group_key = question_index
+        topic = _topic_label(question_id)
+        phrase = f"On the {topic} question,"
 
         hedge_rate = _number(fluency.get("hedges_per_100_words"))
         if hedge_rate is not None and hedge_rate >= HEDGES_HIGH:
@@ -291,8 +436,9 @@ def build_findings(
                     "priority",
                     1,
                     "delivery",
-                    f"Reduce hedging in your answer to {question_name}.",
+                    f"{phrase} reduce hedging in your answer.",
                     f"{hedge_rate:.1f} hedges per 100 words.",
+                    group_key if group_key is not None else f"turn:{turn_position}",
                 ),
             )
         filler_rate = _number(fluency.get("fillers_per_100_words"))
@@ -304,20 +450,9 @@ def build_findings(
                     "priority",
                     1,
                     "delivery",
-                    f"Reduce hesitation fillers in your answer to {question_name}.",
+                    f"{phrase} reduce hesitation fillers in your answer.",
                     f"{filler_rate:.1f} fillers per 100 words; fillers may be under-detected by speech recognition.",
-                ),
-            )
-        if isinstance(word_count, int) and word_count < SHORT_ANSWER_WORDS:
-            _append_finding(
-                findings,
-                turn_position,
-                Finding(
-                    "priority",
-                    2,
-                    "content",
-                    f"Your answer to {question_name} was very short.",
-                    f"{word_count} words.",
+                    group_key if group_key is not None else f"turn:{turn_position}",
                 ),
             )
         thinking_time = _number(fluency.get("thinking_time_seconds"))
@@ -329,37 +464,15 @@ def build_findings(
                     "priority",
                     1,
                     "delivery",
-                    f"Reduce the thinking time before answering {question_name}.",
+                    f"{phrase} reduce the thinking time before answering.",
                     f"{thinking_time:.1f} seconds.",
+                    group_key if group_key is not None else f"turn:{turn_position}",
                 ),
             )
 
-    for group in groups:
-        group_words = 0
-        group_hedges = 0
-        for turn_index in group.get("turn_indexes", []):
-            if not isinstance(turn_index, int) or not 1 <= turn_index <= len(turns):
-                continue
-            fluency = turns[turn_index - 1].get("analysis", {}).get("fluency", {})
-            words = fluency.get("word_count")
-            hedges = fluency.get("hedge_count")
-            if (
-                fluency.get("has_answer")
-                and isinstance(words, int)
-                and words > 0
-                and isinstance(hedges, int)
-            ):
-                group_words += words
-                group_hedges += hedges
-        if group_words:
-            group_rate = group_hedges * 100 / group_words
-            if group_rate <= HEDGES_LOW:
-                position = min(group.get("turn_indexes", [1]))
-                low_hedge_questions.append((position, str(group.get("main_question_id") or "question")))
-
     answered_questions = {
-        group.get("main_question_id")
-        for group in groups
+        group_position
+        for group_position, group in enumerate(groups)
         if group.get("rated") is True
         or any(
             _turn_has_answer(turns[index - 1])
@@ -370,16 +483,20 @@ def build_findings(
     if (
         len(low_hedge_questions) >= MIN_QUESTIONS_FOR_HEDGE_STRENGTH
         and len(answered_questions) >= MIN_QUESTIONS_FOR_HEDGE_STRENGTH
+        and eligible_hedge_words >= MIN_WORDS_FOR_HEDGE_STRENGTH
     ):
+        position, group_key, question_id = low_hedge_questions[0]
+        topic = _topic_label(question_id)
         _append_finding(
             findings,
-            low_hedge_questions[0][0],
+            position,
             Finding(
                 "strength",
                 1,
                 "delivery",
-                f"You kept hedging to {HEDGES_LOW:g} or fewer per 100 words in at least two answers.",
+                f"On the {topic} question, you kept hedging to {HEDGES_LOW:g} or fewer per 100 words across at least two answers.",
                 f"{len(low_hedge_questions)} questions met the low-hedging threshold.",
+                group_key,
             ),
         )
 
@@ -394,6 +511,58 @@ def _append_finding(
     findings.append((position, len(findings), finding))
 
 
+def _group_turns(
+    group: dict[str, Any], turns: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return valid turns referenced by one question group."""
+    return [
+        turns[index - 1]
+        for index in group.get("turn_indexes", [])
+        if isinstance(index, int) and 1 <= index <= len(turns)
+    ]
+
+
+def _inferred_groups(
+    analyzed: dict[str, Any], bank_by_id: Mapping[str, BankQuestion]
+) -> list[dict[str, Any]]:
+    """Group turns by their recorded or inferred main question without content scores."""
+    session = InterviewSession.from_dict(analyzed)
+    labels = resolve_asked_questions(session, bank_by_id)
+    groups: list[dict[str, Any]] = []
+    for index, label in enumerate(labels, start=1):
+        question_id = label.get("main_question_id")
+        question_id = question_id if isinstance(question_id, str) else None
+        if groups and groups[-1]["main_question_id"] == question_id:
+            groups[-1]["turn_indexes"].append(index)
+        else:
+            groups.append(
+                {"main_question_id": question_id, "turn_indexes": [index]}
+            )
+    return groups
+
+
+def _grammar_issues(turn: dict[str, Any]) -> list[dict[str, Any]]:
+    grammar = turn.get("analysis", {}).get("grammar", {})
+    issues = grammar.get("issues", [])
+    return [issue for issue in issues if isinstance(issue, dict)] if isinstance(issues, list) else []
+
+
+def _topic_label(question_id: object) -> str:
+    """Return a readable topic label, falling back to the raw question id."""
+    if isinstance(question_id, str) and question_id:
+        return TOPIC_LABELS.get(question_id, question_id)
+    return "unknown"
+
+
+def _reason_category(group: dict[str, Any]) -> str:
+    """Read the unrated category from either the reason or error field."""
+    for key in ("reason", "error"):
+        value = group.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _number(value: object) -> float | None:
     """Return a finite numeric value as float when available."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -404,6 +573,11 @@ def _number(value: object) -> float | None:
 def _display(value: float | None) -> str:
     """Format an optional numeric finding value."""
     return "-" if value is None else f"{value:.2f}"
+
+
+def _text(value: object) -> str:
+    """Return text safely for coaching evidence."""
+    return value if isinstance(value, str) else ""
 
 
 def _turn_has_answer(turn: dict[str, Any]) -> bool:
