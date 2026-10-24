@@ -87,17 +87,22 @@ Provider unit tests mock faster-whisper and the OpenAI SDK. They do not download
 
 To try a typed-text HR mock interview with the configured Groq language model, run `python scripts/interviewer_demo.py --questions 3 --name Haswanth`. Use `--follow-ups`, `--role`, `--seed`, or `--no-save` to adjust the session; by default, completed and interrupted sessions are saved under `data/sessions`.
 
-## ASR benchmark (E1)
+## Evaluation toolkit
 
-Copy `data/eval/prompts.example.txt` to `data/eval/prompts.txt`, then record a prompted set or spontaneous answers.
+E1 ASR: record prompted clips and benchmark them by model, device, and category.
 ```powershell
 Copy-Item data/eval/prompts.example.txt data/eval/prompts.txt
 python scripts/record_eval_clips.py --prompts data/eval/prompts.txt
-python scripts/record_eval_clips.py --free --seed 17
-python scripts/asr_benchmark.py --manifest data/eval/manifest.csv --models base,small,medium,large-v3 --device cuda --language en --hotwords "SpeakSure, Northbridge" --group-by model,input_device,category
+python scripts/asr_benchmark.py --manifest data/eval/manifest.csv --models base,small --group-by model,input_device,category
 ```
-The recorder stores the selected microphone and prompt category, and `e` lets you correct the reference to what was actually spoken.
-The benchmark writes a non-overwriting CSV plus a Markdown summary with reference-word counts and per-clip aligned errors; CUDA/device mismatches are excluded.
+E2 grammar: evaluate the labelled, by-construction cases; the labels are not an independent gold standard.
+`python scripts/eval_grammar.py`
+E2 real speech: export flags with `python scripts/review_grammar_flags.py analyzed.json`, fill verdicts, then calculate precision with `python scripts/review_grammar_flags.py --score`.
+E3 content: create blind sheets with `python scripts/make_rating_sheet.py data/analysis/session.analyzed.json`, fill ratings, then run `python scripts/eval_content.py ratings.csv data/analysis/session.analyzed.json --merge more-ratings.csv`.
+E3 stability: repeat content scoring with `python scripts/analyze_session.py session.json --content --repeat 5 --out data/analysis/session_runs.json`, then summarize with `python scripts/content_stability.py data/analysis/session_runs.json`.
+The E1 recorder stores the selected microphone and category; `e` edits references to match what was actually spoken.
+E2 case labels are deliberately injected for evaluation and must not be read as human-validated annotation.
+E3 student ratings are never populated by the rating-sheet generator; score agreement only after blind ratings are complete.
 
 ## Web app
 
@@ -115,13 +120,3 @@ Manual test checklist (10 steps):
 8. Early end: Click "End interview early", confirm the prompt, and verify transition to the results screen.
 9. Report display: Observe status polling until "ready", then review the report rendered inside the sandboxed iframe.
 10. Past sessions: Click "Start new interview", verify the completed session appears in the list, and open its report link.
-
-## Content scoring evaluation (E3)
-
-LLM content scores vary between runs; use distinct `--out` names for separate experiments.
-```powershell
-python scripts/analyze_session.py data/sessions/session.json --content --repeat 5 --pause-seconds 1 --out data/analysis/session_e3_a.json
-python scripts/content_stability.py data/analysis/session_e3_a.json
-python scripts/eval_content.py data/eval/ratings.csv data/analysis/session_e3_a.json data/analysis/session_e3_b.json
-```
-Copy `data/eval/ratings.example.csv` and enter one independent 1-5 rating per question.

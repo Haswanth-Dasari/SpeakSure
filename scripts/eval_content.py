@@ -63,8 +63,8 @@ def _band(score: float) -> str:
     return "Strong"
 
 
-def _load_ratings(path: Path) -> list[dict[str, str]]:
-    """Load and validate rating rows and their 1-5 component values."""
+def _load_ratings(path: Path) -> tuple[list[dict[str, str]], int]:
+    """Load complete rating rows and count rows with any blank rating."""
     with path.open("r", encoding="utf-8-sig", newline="") as rating_file:
         reader = csv.DictReader(rating_file)
         required = {"session", "question_id", *RATING_COLUMNS}
@@ -75,8 +75,12 @@ def _load_ratings(path: Path) -> list[dict[str, str]]:
                 + ", ".join(sorted(missing))
             )
         rows = []
+        skipped = 0
         for line_number, source in enumerate(reader, start=2):
             row = {key: (value or "").strip() for key, value in source.items()}
+            if any(not row.get(column) for column in RATING_COLUMNS):
+                skipped += 1
+                continue
             for column in RATING_COLUMNS:
                 try:
                     rating = int(row[column])
@@ -86,10 +90,11 @@ def _load_ratings(path: Path) -> list[dict[str, str]]:
                     ) from None
                 if not 1 <= rating <= 5:
                     raise ValueError(
-                        f"Ratings CSV line {line_number} {column} must be from 1 to 5."
+                        f"Ratings CSV row {line_number} {column} must be from 1 to 5; "
+                        f"got {row[column]!r}."
                     )
             rows.append(row)
-    return rows
+    return rows, skipped
 
 
 def _session_aliases(path: Path, analyzed: dict[str, Any]) -> set[str]:
@@ -223,10 +228,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ratings_csv", type=Path)
     parser.add_argument("analyzed_json", type=Path, nargs="+")
+    parser.add_argument(
+        "--merge",
+        type=Path,
+        nargs="+",
+        default=[],
+        metavar="CSV",
+        help="additional ratings CSV files (put this option after analyzed JSON paths)",
+    )
     args = parser.parse_args(argv)
     try:
+        rating_paths = [args.ratings_csv, *args.merge]
+        ratings: list[dict[str, str]] = []
+        skipped = 0
+        for rating_path in rating_paths:
+            file_rows, file_skipped = _load_ratings(rating_path)
+            ratings.extend(file_rows)
+            skipped += file_skipped
         result = evaluate_ratings(
-            _load_ratings(args.ratings_csv),
+            ratings,
             args.analyzed_json,
         )
     except (OSError, json.JSONDecodeError, ValueError) as error:
@@ -234,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     print(f"Matched rows (n): {result['n']}")
+    print(f"Skipped rows with blank ratings: {skipped}")
     if result["n"] < 5:
         print("Warning: correlations are not meaningful with fewer than 5 matched rows.")
     print(f"Overall Spearman: {_display_number(result['overall_spearman'])}")
