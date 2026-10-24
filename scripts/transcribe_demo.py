@@ -10,6 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from speaksure.speech_to_text import (  # noqa: E402
     LocalSpeechToTextProvider,
     LocalTranscriptionConfig,
+    describe_stt_configuration,
 )
 
 
@@ -18,8 +19,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wav_path", type=Path, help="Path to a WAV recording")
     wav_path = parser.parse_args().wav_path
+    config = LocalTranscriptionConfig.from_env()
+    description = describe_stt_configuration(config)
+    print(
+        f"STT: model={description['model']} "
+        f"device={description['device_setting']} "
+        f"language={description['language']}"
+    )
     audio = wav_path.read_bytes()
-    provider = LocalSpeechToTextProvider(LocalTranscriptionConfig.from_env())
+    provider = LocalSpeechToTextProvider(config)
     result = provider.transcribe_detailed(
         audio,
         filename=wav_path.name,

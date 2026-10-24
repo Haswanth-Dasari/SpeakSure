@@ -37,6 +37,7 @@ from speaksure.speech_to_text import (  # noqa: E402
     LocalSpeechToTextProvider,
     LocalTranscriptionConfig,
     TranscriptionResult,
+    describe_stt_configuration,
 )
 from speaksure.text_to_speech import (  # noqa: E402
     SpeechSynthesisConfig,
@@ -68,8 +69,6 @@ def main() -> int:
     parser.add_argument("--no-save-audio", action="store_true")
     parser.add_argument("--no-warmup", action="store_true")
     args = parser.parse_args()
-    input_device = describe_input_device(args.input_device)
-    print(f"Input device: {input_device.get('name', 'unknown')}")
 
     try:
         questions = select_questions(args.questions, seed=args.seed)
@@ -80,6 +79,14 @@ def main() -> int:
             max_followups_per_question=args.follow_ups,
         )
         stt_config = LocalTranscriptionConfig.from_env()
+        stt_description = describe_stt_configuration(stt_config)
+        print(
+            f"STT: model={stt_description['model']} "
+            f"device={stt_description['device_setting']} "
+            f"language={stt_description['language']}"
+        )
+        input_device = describe_input_device(args.input_device)
+        print(f"Input device: {input_device.get('name', 'unknown')}")
         stt_provider = LocalSpeechToTextProvider(stt_config)
         llm_config = GroqLLMConfig.from_env()
         if not llm_config.api_key:
@@ -126,10 +133,10 @@ def main() -> int:
             difficulty="standard",
             planned_questions=len(questions),
             metadata={
-                "stt_model": stt_config.model_size,
+                "stt_model": stt_provider.config.model_size,
                 "stt_device": stt_provider.actual_device
                 if stt_provider.actual_device != "not-initialized"
-                else stt_config.device,
+                else "not-initialized",
                 "llm_model": llm_config.model,
                 "tts_voice": tts_config.voice_name,
                 "input_device": input_device,
@@ -150,11 +157,15 @@ def main() -> int:
 
         def transcribe(captured: CapturedAnswer) -> TranscriptionResult:
             """Transcribe captured WAV bytes with the configured local provider."""
-            return stt_provider.transcribe_detailed(
-                wav_bytes(captured.samples, captured.sample_rate),
-                filename="answer.wav",
-                content_type="audio/wav",
-            )
+            try:
+                result = stt_provider.transcribe_detailed(
+                    wav_bytes(captured.samples, captured.sample_rate),
+                    filename="answer.wav",
+                    content_type="audio/wav",
+                )
+            finally:
+                session.metadata["stt_device"] = stt_provider.actual_device
+            return result
 
         def speak(text: str) -> SpokenTiming:
             """Speak text on the selected output device and return its timings."""

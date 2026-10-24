@@ -23,6 +23,7 @@ from speaksure.speech_to_text import (  # noqa: E402
     LocalTranscriptionConfig,
     SpeechToTextError,
     TranscriptionResult,
+    describe_stt_configuration,
 )
 
 FILLER_PROMPT = "Umm, let me think like, hmm... Okay, here's what I'm, like, thinking."
@@ -161,8 +162,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        file_audio = [(path, read_wav(path)) for path in args.wav_files]
         base_config = LocalTranscriptionConfig.from_env()
+        description = describe_stt_configuration(base_config)
+        print(
+            f"STT: model={description['model']} "
+            f"device={description['device_setting']} "
+            f"language={description['language']}"
+        )
+        file_audio = [(path, read_wav(path)) for path in args.wav_files]
         config_a = replace(base_config, initial_prompt="")
         config_b = replace(base_config, initial_prompt=args.prompt)
         totals: list[tuple[int, int]] = []

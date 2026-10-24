@@ -13,7 +13,10 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 
 def load_environment(env_file: Path | None = None) -> None:
-    """Load a specific dotenv file without overriding process environment values."""
+    """Load dotenv settings once at startup without overriding process values.
+
+    Repeated calls are safe: existing environment values are never replaced.
+    """
     load_dotenv(dotenv_path=ENV_FILE if env_file is None else env_file, override=False)
 
 

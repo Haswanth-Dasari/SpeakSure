@@ -44,6 +44,18 @@ To use paid API transcription instead, explicitly select `SPEECH_TO_TEXT_PROVIDE
 
 SpeakSure loads the project-root `.env` independently of the shell's current directory, without overriding values already set in the process environment. `.env.example` contains placeholders/defaults and is not loaded automatically. Restart Streamlit after changing configuration.
 
+## Configuration precedence
+
+For every setting, SpeakSure uses the process environment first, then the
+project-root `.env`, then the built-in default. For example, this PowerShell
+override selects `tiny` for one run of the transcription demo:
+
+```powershell
+$env:SPEECH_TO_TEXT_MODEL_SIZE = "tiny"
+python scripts/transcribe_demo.py .\harvard.wav
+Remove-Item Env:SPEECH_TO_TEXT_MODEL_SIZE
+```
+
 Run this safe diagnostic from PowerShell in the project root. It reports the selected provider/model, device available to CTranslate2, initialized device, and dependency presence. Before the first successful transcription in that Python process, `actual_device` is `not-initialized`; the app also displays the device used after local inference. The diagnostic never prints the API key:
 
 ```powershell

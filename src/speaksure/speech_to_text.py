@@ -17,12 +17,13 @@ from .configuration import (
     get_api_key,
     get_local_device,
     get_local_model_size,
-    get_speech_to_text_provider,
     get_speech_to_text_hotwords,
     get_speech_to_text_initial_prompt,
     get_speech_to_text_language,
+    get_speech_to_text_provider,
     get_speech_to_text_vad_filter,
     get_transcription_model,
+    get_speech_to_text_provider,
 )
 
 
@@ -275,6 +276,21 @@ class LocalTranscriptionConfig:
             hotwords=hotwords,
             initial_prompt=initial_prompt,
         )
+
+
+def describe_stt_configuration(
+    config: LocalTranscriptionConfig,
+) -> dict[str, str | bool]:
+    """Return safe, non-secret details about the selected STT configuration."""
+    return {
+        "provider": get_speech_to_text_provider(),
+        "model": config.model_size,
+        "device_setting": config.device,
+        "language": config.language,
+        "vad_filter": config.vad_filter,
+        "hotwords_set": bool(config.hotwords),
+        "initial_prompt_set": bool(config.initial_prompt),
+    }
 
 
 def resolve_local_device(preference: str) -> str:

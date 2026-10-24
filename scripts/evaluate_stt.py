@@ -7,6 +7,7 @@ from jiwer import wer
 from speaksure.speech_to_text import (
     LocalSpeechToTextProvider,
     LocalTranscriptionConfig,
+    describe_stt_configuration,
 )
 
 AUDIO_PATH = Path("harvard.wav")
@@ -25,12 +26,18 @@ def main():
     if not AUDIO_PATH.exists():
         raise FileNotFoundError(f"Audio file not found: {AUDIO_PATH}")
 
+    config = LocalTranscriptionConfig.from_env()
+    description = describe_stt_configuration(config)
+    print(
+        f"STT: model={description['model']} "
+        f"device={description['device_setting']} "
+        f"language={description['language']}"
+    )
     audio_bytes = AUDIO_PATH.read_bytes()
 
     with wave.open(str(AUDIO_PATH), "rb") as wav:
         duration = wav.getnframes() / wav.getframerate()
 
-    config = LocalTranscriptionConfig.from_env()
     provider = LocalSpeechToTextProvider(config)
 
     print("SpeakSure WER Baseline")
