@@ -492,7 +492,11 @@ class LocalSpeechToTextProvider:
                 }
         segments, info = model.transcribe(audio, **options)
         segments = tuple(segments)
-        transcript = " ".join(segment.text.strip() for segment in segments).strip()
+        transcript = " ".join(
+            segment_text
+            for segment_text in (segment.text.strip() for segment in segments)
+            if segment_text
+        )
         words = tuple(
             TranscriptWord(
                 text=word.word,

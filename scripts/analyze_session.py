@@ -1,8 +1,13 @@
 """Analyze a saved interview session using transcript and audio heuristics."""
 
 import argparse
+import copy
+import math
 import sys
 from pathlib import Path
+from statistics import median
+from time import sleep
+from typing import Any, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -24,11 +29,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--audio-root", type=Path, default=Path("."))
     parser.add_argument("--content", action="store_true")
     parser.add_argument("--role", default="software engineering fresher")
+    parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--pause-seconds", type=float, default=1.0)
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
+    if not 1 <= args.repeat <= 10:
+        parser.error("--repeat must be from 1 to 10.")
+    if args.repeat > 1 and not args.content:
+        parser.error("--repeat requires --content.")
+    if not math.isfinite(args.pause_seconds) or args.pause_seconds < 0:
+        parser.error("--pause-seconds must be a finite non-negative number.")
 
     try:
         source = args.session
         session = InterviewSession.load(source)
+        output_path = args.out or (
+            Path("data/analysis") / f"{source.stem}.analyzed.json"
+        )
+        if output_path.resolve() == source.resolve():
+            raise ValueError("Output path must not overwrite the source session.")
+        if output_path.exists() and not args.force:
+            raise FileExistsError(
+                f"Analyzed output already exists: {output_path}. "
+                "Choose another --out path or pass --force to overwrite."
+            )
         llm = None
         if args.content:
             analysis_config = GroqAnalysisLLMConfig.from_env()
@@ -39,13 +63,22 @@ def main(argv: list[str] | None = None) -> int:
             if not analysis_config.model.strip():
                 raise ValueError("Content analysis model is not configured.")
             llm = build_analysis_llm_client(analysis_config)
-        analyzed = analyze_session(
-            session,
-            audio_root=args.audio_root,
-            llm=llm,
-            role=args.role,
-        )
-        if args.content and any(
+        analyzed_runs = []
+        for run_index in range(args.repeat):
+            analyzed_runs.append(
+                analyze_session(
+                    session,
+                    audio_root=args.audio_root,
+                    llm=llm,
+                    role=args.role,
+                )
+            )
+            if run_index + 1 < args.repeat and args.pause_seconds:
+                sleep(args.pause_seconds)
+        analyzed = analyzed_runs[-1]
+        if args.repeat > 1:
+            _select_median_content_run(analyzed, analyzed_runs)
+        if args.content and args.repeat == 1 and any(
             group.get("error") == "llm_error"
             for group in analyzed.analysis.get("content_by_question", [])
         ):
@@ -53,11 +86,6 @@ def main(argv: list[str] | None = None) -> int:
                 "Content analysis could not use the configured model. "
                 "Check GROQ_API_KEY, LLM_ANALYSIS_MODEL, and network access."
             )
-        output_path = args.out or (
-            Path("data/analysis") / f"{source.stem}.analyzed.json"
-        )
-        if output_path.resolve() == source.resolve():
-            raise ValueError("Output path must not overwrite the source session.")
         saved_path = analyzed.save_to(output_path)
     except (OSError, SessionFormatError, ValueError, LLMError) as error:
         print(f"Could not analyze session: {error}", file=sys.stderr)
@@ -68,6 +96,107 @@ def main(argv: list[str] | None = None) -> int:
         _print_content_report(analyzed)
     print(f"Analysis saved: {saved_path}")
     return 0
+
+
+def _select_median_content_run(
+    analyzed: InterviewSession, analyzed_runs: Sequence[InterviewSession]
+) -> None:
+    """Store report-compatible runs and select each question's median-score group."""
+    runs = [
+        {
+            "content_by_question": copy.deepcopy(
+                run.analysis.get("content_by_question", [])
+            )
+        }
+        for run in analyzed_runs
+    ]
+    analyzed.analysis["content_runs"] = runs
+    source_groups = analyzed_runs[0].analysis.get("content_by_question", [])
+    selected_groups: list[dict[str, Any]] = []
+    for source_group in source_groups:
+        key = _content_group_key(source_group)
+        candidates = [
+            (run_index, group)
+            for run_index, run in enumerate(runs, start=1)
+            for group in run["content_by_question"]
+            if _content_group_key(group) == key
+        ]
+        rated = [
+            (run_index, group)
+            for run_index, group in candidates
+            if group.get("rated") is True
+            and isinstance(group.get("content_score"), (int, float))
+        ]
+        if rated:
+            target_score = median(
+                float(group["content_score"]) for _, group in rated
+            )
+            run_index, selected = min(
+                rated,
+                key=lambda item: abs(float(item[1]["content_score"]) - target_score),
+            )
+        elif candidates:
+            run_index, selected = candidates[0]
+        else:
+            continue
+        selected_group = copy.deepcopy(selected)
+        selected_group["selected_run_index"] = run_index
+        selected_groups.append(selected_group)
+
+    analyzed.analysis["content_by_question"] = selected_groups
+    _refresh_content_summary(analyzed, selected_groups)
+
+
+def _content_group_key(group: dict[str, Any]) -> tuple[object, tuple[object, ...]]:
+    """Identify corresponding groups by question label and turn indexes."""
+    turn_indexes = group.get("turn_indexes", [])
+    return (
+        group.get("main_question_id"),
+        tuple(turn_indexes) if isinstance(turn_indexes, list) else (),
+    )
+
+
+def _refresh_content_summary(
+    analyzed: InterviewSession, groups: list[dict[str, Any]]
+) -> None:
+    """Recompute the selected-run aggregate fields used by existing reports."""
+    rated = [group for group in groups if group.get("rated") is True]
+
+    def average(field: str) -> float | None:
+        values = [
+            float(group[field])
+            for group in rated
+            if isinstance(group.get(field), (int, float))
+        ]
+        return sum(values) / len(values) if values else None
+
+    sources: dict[str, int] = {"recorded": 0, "inferred": 0, "unknown": 0}
+    feedback_by_question: dict[str, dict[str, list[str]]] = {}
+    for group in groups:
+        source = str(group.get("label_source", "unknown"))
+        sources[source] = sources.get(source, 0) + 1
+    for group in rated:
+        question_id = str(group.get("main_question_id"))
+        feedback = feedback_by_question.setdefault(
+            question_id, {"strengths": [], "improvements": []}
+        )
+        feedback["strengths"].extend(group.get("strengths", []))
+        feedback["improvements"].extend(group.get("improvements", []))
+    analyzed.analysis["content_summary"] = {
+        "rated_questions": len(rated),
+        "unrated_questions": len(groups) - len(rated),
+        "mean_content_score": average("content_score"),
+        "mean_relevance": average("relevance"),
+        "mean_specificity": average("specificity"),
+        "mean_clarity": average("clarity"),
+        "mean_coverage_ratio": average("coverage_ratio"),
+        "content_score_by_question": [
+            group.get("content_score") if group.get("rated") is True else None
+            for group in groups
+        ],
+        "feedback_by_question_id": feedback_by_question,
+        "label_sources": sources,
+    }
 
 
 def _print_report(session: InterviewSession) -> None:

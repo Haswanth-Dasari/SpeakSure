@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import random
 import re
+import time
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Callable
 
 from ..interviewer import neutralize_markup
 from ..llm_client import LLMClient, LLMError
@@ -37,6 +39,14 @@ CONTENT_TEMPERATURE = 0.0
 CONTENT_MAX_TOKENS = 1500
 # Number of additional attempts allowed after invalid model output.
 CONTENT_RETRIES = 1
+# Maximum additional attempts after a rate limit or timeout.
+TRANSIENT_RETRIES = 3
+# Base delay for transient retries before jitter, in seconds.
+RETRY_BASE_SECONDS = 2.0
+# Maximum random jitter added to a retry delay, in seconds.
+RETRY_JITTER_SECONDS = 0.25
+# Maximum retry delay, in seconds.
+RETRY_MAX_SECONDS = 20.0
 # Number of words allowed in each evidence quotation.
 MAX_EVIDENCE_WORDS = 15
 # ASR confidence below this value is considered low.
@@ -201,15 +211,27 @@ def analyze_content(
     *,
     asr_mean_probability: float | None,
     asr_reliability: str,
+    sleep: Callable[[float], None] = time.sleep,
+    include_attempts: bool = False,
 ) -> dict[str, Any]:
-    """Rate a consecutive main-question exchange with its question-bank rubric."""
+    """Rate a question group with safe retries and optional attempt metadata."""
+
+    def result_with_attempts(result: dict[str, Any], attempts: int) -> dict[str, Any]:
+        """Attach attempt counts for session groups when explicitly requested."""
+        if include_attempts:
+            result["attempts"] = attempts
+        return result
+
     question = bank_by_id.get(main_question_id) if main_question_id else None
     if question is None:
-        return {
-            "analyzer_version": CONTENT_ANALYZER_VERSION,
-            "rated": False,
-            "error": "unknown_question",
-        }
+        return result_with_attempts(
+            {
+                "analyzer_version": CONTENT_ANALYZER_VERSION,
+                "rated": False,
+                "error": "unknown_question",
+            },
+            0,
+        )
 
     pairs = [
         (turn.question, _answer_text(turn.answer))
@@ -217,11 +239,14 @@ def analyze_content(
     ]
     answer_text = " ".join(answer for _, answer in pairs).strip()
     if len(_normalized_tokens(answer_text)) < MIN_WORDS_TO_RATE:
-        return {
-            "analyzer_version": CONTENT_ANALYZER_VERSION,
-            "rated": False,
-            "reason": "too_short_or_empty",
-        }
+        return result_with_attempts(
+            {
+                "analyzer_version": CONTENT_ANALYZER_VERSION,
+                "rated": False,
+                "reason": "too_short_or_empty",
+            },
+            0,
+        )
 
     behavioural = question.id in BEHAVIOURAL_QUESTION_IDS
     numbered_hints = "\n".join(
@@ -251,7 +276,11 @@ def analyze_content(
     ]
     max_tokens = CONTENT_MAX_TOKENS
     last_category = "invalid_output"
-    for attempt in range(CONTENT_RETRIES + 1):
+    attempt = 0
+    transient_retries = 0
+    invalid_retries = 0
+    while True:
+        attempt += 1
         try:
             response = llm.complete(
                 messages,
@@ -261,40 +290,64 @@ def analyze_content(
             )
         except LLMError as error:
             last_category = "llm_error"
-            if attempt < CONTENT_RETRIES and "empty" in str(error).lower():
-                max_tokens *= 2
+            safe_message = str(error).lower()
+            transient = "rate limited" in safe_message or "timed out" in safe_message
+            if transient and transient_retries < TRANSIENT_RETRIES:
+                delay = min(
+                    RETRY_BASE_SECONDS * (2**transient_retries),
+                    RETRY_MAX_SECONDS,
+                )
+                delay = min(
+                    delay + random.uniform(0.0, RETRY_JITTER_SECONDS),
+                    RETRY_MAX_SECONDS,
+                )
+                transient_retries += 1
+                sleep(delay)
                 continue
-            return {
-                "analyzer_version": CONTENT_ANALYZER_VERSION,
-                "rated": False,
-                "error": last_category,
-            }
+            if (
+                not transient
+                and "empty" in safe_message
+                and invalid_retries < CONTENT_RETRIES
+            ):
+                max_tokens *= 2
+                invalid_retries += 1
+                continue
+            return result_with_attempts(
+                {
+                    "analyzer_version": CONTENT_ANALYZER_VERSION,
+                    "rated": False,
+                    "error": last_category,
+                },
+                attempt,
+            )
         try:
             parsed = parse_content_result(
                 response.text, question.rubric_hints, behavioural
             )
         except ValueError:
             last_category = "invalid_output"
-            if attempt < CONTENT_RETRIES:
+            if invalid_retries < CONTENT_RETRIES:
+                invalid_retries += 1
                 continue
-            return {
-                "analyzer_version": CONTENT_ANALYZER_VERSION,
-                "rated": False,
-                "error": last_category,
-            }
+            return result_with_attempts(
+                {
+                    "analyzer_version": CONTENT_ANALYZER_VERSION,
+                    "rated": False,
+                    "error": last_category,
+                },
+                attempt,
+            )
         scored = score_content(parsed, answer_text)
-        return {
-            "analyzer_version": CONTENT_ANALYZER_VERSION,
-            "rated": True,
-            "model": response.model,
-            "question_id": question.id,
-            **scored,
-        }
-    return {
-        "analyzer_version": CONTENT_ANALYZER_VERSION,
-        "rated": False,
-        "error": last_category,
-    }
+        return result_with_attempts(
+            {
+                "analyzer_version": CONTENT_ANALYZER_VERSION,
+                "rated": True,
+                "model": response.model,
+                "question_id": question.id,
+                **scored,
+            },
+            attempt,
+        )
 
 
 def _answer_text(answer: TranscriptionResult | None) -> str:

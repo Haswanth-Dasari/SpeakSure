@@ -168,6 +168,7 @@ def _analyze_content_groups(
             llm,
             asr_mean_probability=asr_mean,
             asr_reliability=asr_reliability,
+            include_attempts=True,
         )
         if question_id is None or content.get("error") == "unknown_question":
             content["reason"] = "unknown_question"

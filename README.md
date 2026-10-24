@@ -86,3 +86,36 @@ python -m pytest -q
 Provider unit tests mock faster-whisper and the OpenAI SDK. They do not download model weights, make network calls, require real API credentials, or execute on a GPU. Browser microphone permission, actual model download/inference, and hardware device selection still need to be checked manually on the target machine.
 
 To try a typed-text HR mock interview with the configured Groq language model, run `python scripts/interviewer_demo.py --questions 3 --name Haswanth`. Use `--follow-ups`, `--role`, `--seed`, or `--no-save` to adjust the session; by default, completed and interrupted sessions are saved under `data/sessions`.
+
+## ASR benchmark (E1)
+
+Copy `data/eval/prompts.example.txt` to `data/eval/prompts.txt`, then record a prompted set or spontaneous answers.
+```powershell
+Copy-Item data/eval/prompts.example.txt data/eval/prompts.txt
+python scripts/record_eval_clips.py --prompts data/eval/prompts.txt
+python scripts/record_eval_clips.py --free --seed 17
+python scripts/asr_benchmark.py --manifest data/eval/manifest.csv --models base,small,medium,large-v3 --device cuda --language en --hotwords "SpeakSure, Northbridge" --group-by model,input_device,category
+```
+The recorder stores the selected microphone and prompt category, and `e` lets you correct the reference to what was actually spoken.
+The benchmark writes a non-overwriting CSV plus a Markdown summary with reference-word counts and per-clip aligned errors; CUDA/device mismatches are excluded.
+
+## Web app
+
+Run the local API from the project directory:
+```powershell
+python scripts/run_web.py
+```
+It binds to `127.0.0.1:8000`; `--port 8010` changes the port. Remote binding requires `--host 0.0.0.0 --allow-remote`.
+The browser frontend is pending; the API accepts browser-recorded raw `audio/wav` uploads.
+Endpoints: `GET /api/health`, `POST /api/sessions`, `GET /api/sessions`, `POST /api/sessions/{id}/answer`, `POST /api/sessions/{id}/finish`.
+Also: `GET /api/sessions/{id}/status`, `GET /api/sessions/{id}/audio/{name}.wav`, and `GET /report/{id}`.
+
+## Content scoring evaluation (E3)
+
+LLM content scores vary between runs; use distinct `--out` names for separate experiments.
+```powershell
+python scripts/analyze_session.py data/sessions/session.json --content --repeat 5 --pause-seconds 1 --out data/analysis/session_e3_a.json
+python scripts/content_stability.py data/analysis/session_e3_a.json
+python scripts/eval_content.py data/eval/ratings.csv data/analysis/session_e3_a.json data/analysis/session_e3_b.json
+```
+Copy `data/eval/ratings.example.csv` and enter one independent 1-5 rating per question.

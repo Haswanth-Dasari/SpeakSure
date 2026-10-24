@@ -568,6 +568,44 @@ def test_local_detailed_transcription_maps_words_and_passes_options():
     }
 
 
+def test_local_transcription_joins_nonempty_segment_text_with_one_space():
+    segment_words = [
+        SimpleNamespace(word=" Hello,", start=0.0, end=0.2, probability=0.8),
+        SimpleNamespace(word=" world!", start=0.2, end=0.4, probability=0.9),
+        SimpleNamespace(word=" again.", start=0.4, end=0.6, probability=0.7),
+    ]
+
+    class FakeModel:
+        def transcribe(self, _audio, **_kwargs):
+            return iter(
+                [
+                    SimpleNamespace(text=" Hello, ", words=[segment_words[0]]),
+                    SimpleNamespace(text="   ", words=[]),
+                    SimpleNamespace(text="world!", words=[segment_words[1]]),
+                    SimpleNamespace(text="again.", words=[segment_words[2]]),
+                ]
+            ), SimpleNamespace(duration=0.6, language="en", language_probability=0.9)
+
+    provider = LocalSpeechToTextProvider(
+        LocalTranscriptionConfig(model_size="base", device="cpu"),
+        model_loader=lambda *_args: (FakeModel(), "cpu", "int8"),
+    )
+
+    result = provider.transcribe_detailed(
+        make_wav_audio(), filename="recording.wav", content_type="audio/wav"
+    )
+
+    assert result.text == "Hello, world! again."
+    assert [word.text for word in result.words] == [
+        " Hello,",
+        " world!",
+        " again.",
+    ]
+    assert [word.start for word in result.words] == [0.0, 0.2, 0.4]
+    assert [word.end for word in result.words] == [0.2, 0.4, 0.6]
+    assert [word.probability for word in result.words] == [0.8, 0.9, 0.7]
+
+
 def test_local_detailed_transcription_maps_auto_language_and_empty_hotwords():
     captured = {}
 

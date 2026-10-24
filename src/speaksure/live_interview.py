@@ -11,9 +11,11 @@ from typing import Callable
 import numpy as np
 
 from .audio_capture import CapturedAnswer, save_wav
-from .interviewer import Interviewer
+from .analysis.audio_delivery import analyze_audio_delivery
+from .analysis.fluency import analyze_fluency
+from .interviewer import Interviewer, InterviewerTurn
 from .interviewer_prompts import REPEAT_REQUEST
-from .session_log import InterviewSession
+from .session_log import InterviewSession, Turn
 from .speech_to_text import TranscriptionResult
 
 
@@ -53,6 +55,21 @@ class SpokenTiming:
     playback_seconds: float
 
 
+@dataclass(frozen=True)
+class TurnProcessingResult:
+    """State and output produced by processing one captured interview answer."""
+
+    reply: InterviewerTurn | None
+    turn: Turn | None
+    transcription: TranscriptionResult | None
+    capture_diagnostics: dict[str, object]
+    empty_attempts: int
+    listen_attempts: int
+    transcription_errors: tuple[dict[str, object], ...]
+    pending_speech_failure: bool
+    transcription_error: bool = False
+
+
 def format_transcript_flags(
     result: TranscriptionResult, threshold: float = 0.5
 ) -> str:
@@ -70,6 +87,217 @@ def format_transcript_flags(
         if word.probability < threshold
         else word.text.strip()
         for word in result.words
+    )
+
+
+def process_interview_turn(
+    *,
+    interviewer: Interviewer,
+    session: InterviewSession,
+    settings: LiveSettings,
+    captured: CapturedAnswer,
+    current_question: str,
+    current_question_id: str | None,
+    current_is_follow_up: bool,
+    transcribe: Callable[[CapturedAnswer], TranscriptionResult],
+    speak: Callable[[str], SpokenTiming | None] | None,
+    clock: Callable[[], float],
+    output: Callable[[str], None],
+    empty_attempts: int = 0,
+    listen_attempts: int = 0,
+    transcription_errors: tuple[dict[str, object], ...] = (),
+    pending_speech_failure: bool = False,
+    audio_path_override: Path | None = None,
+    safe_transcription_errors: bool = False,
+) -> TurnProcessingResult:
+    """Transcribe, analyze, decide, and record one turn for terminal or web use."""
+    attempts = listen_attempts + 1
+    capture_diagnostics = _capture_diagnostics(captured, attempts=attempts)
+    if captured.samples.size:
+        output(
+            f"(heard {capture_diagnostics['seconds']:.1f} s, "
+            f"peak {capture_diagnostics['peak']:.2f}, "
+            f"level {capture_diagnostics['rms_dbfs']:.1f} dB)"
+        )
+
+    raw_result: TranscriptionResult | None = None
+    stt_seconds = 0.0
+    answer_text = ""
+    errors = list(transcription_errors)
+    if captured.stop_reason != "no_speech" and captured.samples.size:
+        started_at = clock()
+        try:
+            raw_result = transcribe(captured)
+        except Exception as error:
+            stt_seconds = clock() - started_at
+            empty_attempts += 1
+            message = (
+                "Speech transcription failed. Please try again."
+                if safe_transcription_errors
+                else str(error)[:200]
+            )
+            errors.append(
+                {
+                    "type": type(error).__name__,
+                    "message": message,
+                    "captured_seconds": capture_diagnostics["seconds"],
+                }
+            )
+            if not safe_transcription_errors:
+                output(f"(transcription error: {type(error).__name__}: {message})")
+            output("Sorry, I could not understand that. Please try again.")
+            if speak is not None:
+                try:
+                    speak(REPEAT_REQUEST)
+                except Exception:
+                    pending_speech_failure = True
+            return TurnProcessingResult(
+                reply=None,
+                turn=None,
+                transcription=None,
+                capture_diagnostics=capture_diagnostics,
+                empty_attempts=empty_attempts,
+                listen_attempts=attempts,
+                transcription_errors=tuple(errors),
+                pending_speech_failure=pending_speech_failure,
+                transcription_error=True,
+            )
+        stt_seconds = clock() - started_at
+        answer_text = raw_result.text.strip()
+        if len(answer_text.split()) < settings.min_answer_words:
+            answer_text = ""
+        output("You: " + format_transcript_flags(raw_result))
+    else:
+        output("You: ")
+
+    if not answer_text:
+        empty_attempts += 1
+    llm_started_at = clock()
+    reply = interviewer.next_turn(answer_text)
+    llm_elapsed = clock() - llm_started_at
+    llm_seconds = (
+        llm_elapsed if reply.llm_latency_seconds is not None else None
+    )
+    if reply.kind == "repeat":
+        output(f"Interviewer: {reply.utterance}")
+        if speak is not None:
+            try:
+                speak(reply.utterance)
+            except Exception:
+                pending_speech_failure = True
+        return TurnProcessingResult(
+            reply=reply,
+            turn=None,
+            transcription=raw_result,
+            capture_diagnostics=capture_diagnostics,
+            empty_attempts=empty_attempts,
+            listen_attempts=attempts,
+            transcription_errors=tuple(errors),
+            pending_speech_failure=pending_speech_failure,
+        )
+
+    final_answer = raw_result or _empty_transcription()
+    turn_index = len(session.turns) + 1
+    audio_path: str | None = None
+    if settings.save_audio and captured.samples.size:
+        if audio_path_override is not None:
+            audio_path = str(audio_path_override)
+        else:
+            wav_path = (
+                settings.sessions_dir
+                / session.session_id
+                / f"turn_{turn_index:02d}.wav"
+            )
+            audio_path = str(
+                save_wav(wav_path, captured.samples, captured.sample_rate)
+            )
+
+    capture_settings = getattr(session, "capture_settings", None)
+    end_silence = getattr(capture_settings, "end_silence_seconds", None)
+    if end_silence is None:
+        end_silence = session.metadata.get("end_silence_seconds")
+    low_confidence_words = [
+        {"word": word.text, "probability": word.probability}
+        for word in final_answer.words
+        if word.probability < 0.5
+    ]
+    fluency = analyze_fluency(
+        final_answer, captured.thinking_time_seconds
+    )
+    audio_delivery = analyze_audio_delivery(audio_path, int(fluency["word_count"]))
+    analysis: dict[str, object] = {
+        "timing": {
+            "capture_stop_reason": captured.stop_reason,
+            "thinking_time_seconds": captured.thinking_time_seconds,
+            "answer_duration_seconds": captured.answer_duration_seconds,
+            "stt_seconds": stt_seconds,
+            "llm_seconds": llm_seconds,
+            "tts_synthesis_seconds": None,
+            "response_gap_estimate_seconds": None,
+            "end_silence_seconds": end_silence,
+        },
+        "interviewer": {
+            "kind": reply.kind,
+            "question_id": reply.question_id,
+            "rationale": reply.rationale,
+            "used_fallback": reply.used_fallback,
+            "fallback_reason": reply.fallback_reason,
+            "llm_latency_seconds": reply.llm_latency_seconds,
+        },
+        "asked": {
+            "main_question_id": current_question_id,
+            "is_follow_up": current_is_follow_up,
+        },
+        "empty_attempts": empty_attempts,
+        "low_confidence_words": low_confidence_words,
+        "transcription_errors": errors,
+        "capture": capture_diagnostics,
+        "fluency": fluency,
+        "audio_delivery": audio_delivery,
+    }
+    if pending_speech_failure:
+        analysis["speech_output_failed"] = True
+        pending_speech_failure = False
+    turn = session.add_turn(
+        current_question,
+        answer=final_answer,
+        audio_path=audio_path,
+        thinking_time_seconds=captured.thinking_time_seconds,
+        answer_duration_seconds=captured.answer_duration_seconds,
+        analysis=analysis,
+    )
+
+    output(f"Interviewer: {reply.utterance}")
+    spoken_timing = None
+    if speak is not None:
+        try:
+            spoken_timing = speak(reply.utterance)
+        except Exception:
+            pending_speech_failure = True
+            turn.analysis["speech_output_failed"] = True
+    if speak is not None:
+        if spoken_timing is None:
+            turn.analysis["speech_output_failed"] = True
+        else:
+            turn.analysis["timing"]["tts_synthesis_seconds"] = (
+        spoken_timing.synthesis_seconds
+            )
+    tts_seconds = (
+        spoken_timing.synthesis_seconds if spoken_timing is not None else 0.0
+    )
+    timing = turn.analysis["timing"]
+    timing["response_gap_estimate_seconds"] = (
+        stt_seconds + (llm_seconds or 0.0) + tts_seconds
+    )
+    return TurnProcessingResult(
+        reply=reply,
+        turn=turn,
+        transcription=raw_result,
+        capture_diagnostics=capture_diagnostics,
+        empty_attempts=0,
+        listen_attempts=0,
+        transcription_errors=(),
+        pending_speech_failure=pending_speech_failure,
     )
 
 
@@ -124,146 +352,37 @@ class LiveInterviewRunner:
                 self._sleep(self._settings.settle_seconds)
                 self._output("Listening...")
                 captured = self._listen()
-                listen_attempts += 1
-                capture_diagnostics = _capture_diagnostics(
-                    captured, attempts=listen_attempts
+                processed = process_interview_turn(
+                    interviewer=self._interviewer,
+                    session=self._session,
+                    settings=self._settings,
+                    captured=captured,
+                    current_question=current_question,
+                    current_question_id=current_question_id,
+                    current_is_follow_up=current_is_follow_up,
+                    transcribe=self._transcribe,
+                    speak=self._speak_or_report,
+                    clock=self._clock,
+                    output=self._output,
+                    empty_attempts=empty_attempts,
+                    listen_attempts=listen_attempts,
+                    transcription_errors=tuple(transcription_errors),
+                    pending_speech_failure=self._pending_speech_failure,
                 )
-                if captured.samples.size:
-                    self._output(
-                        f"(heard {capture_diagnostics['seconds']:.1f} s, "
-                        f"peak {capture_diagnostics['peak']:.2f}, "
-                        f"level {capture_diagnostics['rms_dbfs']:.1f} dB)"
-                    )
-                raw_result: TranscriptionResult | None = None
-                stt_seconds = 0.0
-                answer_text = ""
-
-                if captured.stop_reason != "no_speech" and captured.samples.size:
-                    started_at = self._clock()
-                    try:
-                        raw_result = self._transcribe(captured)
-                    except Exception as error:
-                        stt_seconds = self._clock() - started_at
-                        empty_attempts += 1
-                        message = str(error)[:200]
-                        transcription_errors.append(
-                            {
-                                "type": type(error).__name__,
-                                "message": message,
-                                "captured_seconds": capture_diagnostics["seconds"],
-                            }
-                        )
-                        self._output(
-                            f"(transcription error: {type(error).__name__}: {message})"
-                        )
-                        self._output("Sorry, I could not understand that. Please try again.")
-                        self._speak_or_report(REPEAT_REQUEST)
-                        continue
-                    stt_seconds = self._clock() - started_at
-                    answer_text = raw_result.text.strip()
-                    if len(answer_text.split()) < self._settings.min_answer_words:
-                        answer_text = ""
-                    self._output("You: " + format_transcript_flags(raw_result))
-                else:
-                    self._output("You: ")
-
-                if not answer_text:
-                    empty_attempts += 1
-                llm_started_at = self._clock()
-                reply = self._interviewer.next_turn(answer_text)
-                llm_elapsed = self._clock() - llm_started_at
-                llm_seconds = (
-                    llm_elapsed if reply.llm_latency_seconds is not None else None
-                )
-                if reply.kind == "repeat":
-                    self._output(f"Interviewer: {reply.utterance}")
-                    self._speak_or_report(reply.utterance)
+                empty_attempts = processed.empty_attempts
+                listen_attempts = processed.listen_attempts
+                transcription_errors = list(processed.transcription_errors)
+                self._pending_speech_failure = processed.pending_speech_failure
+                if processed.transcription_error or (
+                    processed.reply is not None
+                    and processed.reply.kind == "repeat"
+                ):
                     continue
-
-                final_answer = raw_result or _empty_transcription()
-                turn_index = len(self._session.turns) + 1
-                audio_path: str | None = None
-                if self._settings.save_audio and captured.samples.size:
-                    wav_path = (
-                        self._settings.sessions_dir
-                        / self._session.session_id
-                        / f"turn_{turn_index:02d}.wav"
-                    )
-                    audio_path = str(
-                        save_wav(wav_path, captured.samples, captured.sample_rate)
-                    )
-
-                capture_settings = getattr(
-                    self._session, "capture_settings", None
-                )
-                end_silence = getattr(
-                    capture_settings, "end_silence_seconds", None
-                )
-                if end_silence is None:
-                    end_silence = self._session.metadata.get(
-                        "end_silence_seconds"
-                    )
-                low_confidence_words = [
-                    {"word": word.text, "probability": word.probability}
-                    for word in final_answer.words
-                    if word.probability < 0.5
-                ]
-                analysis: dict[str, object] = {
-                    "timing": {
-                        "capture_stop_reason": captured.stop_reason,
-                        "thinking_time_seconds": captured.thinking_time_seconds,
-                        "answer_duration_seconds": captured.answer_duration_seconds,
-                        "stt_seconds": stt_seconds,
-                        "llm_seconds": llm_seconds,
-                        "tts_synthesis_seconds": None,
-                        "response_gap_estimate_seconds": None,
-                        "end_silence_seconds": end_silence,
-                    },
-                    "interviewer": {
-                        "kind": reply.kind,
-                        "question_id": reply.question_id,
-                        "rationale": reply.rationale,
-                        "used_fallback": reply.used_fallback,
-                        "fallback_reason": reply.fallback_reason,
-                        "llm_latency_seconds": reply.llm_latency_seconds,
-                    },
-                    "asked": {
-                        "main_question_id": current_question_id,
-                        "is_follow_up": current_is_follow_up,
-                    },
-                    "empty_attempts": empty_attempts,
-                    "low_confidence_words": low_confidence_words,
-                    "transcription_errors": list(transcription_errors),
-                    "capture": capture_diagnostics,
-                }
-                if self._pending_speech_failure:
-                    analysis["speech_output_failed"] = True
-                    self._pending_speech_failure = False
-                turn = self._session.add_turn(
-                    current_question,
-                    answer=final_answer,
-                    audio_path=audio_path,
-                    thinking_time_seconds=captured.thinking_time_seconds,
-                    answer_duration_seconds=captured.answer_duration_seconds,
-                    analysis=analysis,
-                )
-
-                self._output(f"Interviewer: {reply.utterance}")
-                spoken_timing = self._speak_or_report(reply.utterance)
-                if spoken_timing is None:
-                    turn.analysis["speech_output_failed"] = True
-                else:
-                    timing = turn.analysis["timing"]
-                    timing["tts_synthesis_seconds"] = spoken_timing.synthesis_seconds
-                tts_seconds = (
-                    spoken_timing.synthesis_seconds if spoken_timing is not None else 0.0
-                )
-                timing = turn.analysis["timing"]
-                timing["response_gap_estimate_seconds"] = (
-                    stt_seconds + (llm_seconds or 0.0) + tts_seconds
-                )
+                reply = processed.reply
+                if reply is None:
+                    continue
                 self._save_session()
-                if reply.kind == "follow_up":
+                if reply.kind in {"follow_up", "clarify"}:
                     current_question = reply.utterance
                     current_is_follow_up = True
                 elif reply.kind == "next_question":
