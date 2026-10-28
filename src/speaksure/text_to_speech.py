@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,11 +199,19 @@ class PiperSpeechSynthesizer:
         self.length_scale = length_scale
         self._voice_loader = voice_loader or _load_piper_voice
         self._voice: _PiperVoice | None = None
+        self._voice_lock = threading.Lock()
 
     def _get_voice(self) -> _PiperVoice:
-        """Load the configured voice once, raising an actionable error if absent."""
+        """Load the voice once, even if warm-up and a request race to do it."""
         if self._voice is not None:
             return self._voice
+        with self._voice_lock:
+            if self._voice is not None:
+                return self._voice
+            return self._load_voice()
+
+    def _load_voice(self) -> _PiperVoice:
+        """Load the configured voice, raising an actionable error if absent."""
 
         model_path = self.models_dir / f"{self.voice_name}.onnx"
         config_path = Path(f"{model_path}.json")

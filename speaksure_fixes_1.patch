@@ -1,0 +1,87 @@
+diff --git a/src/speaksure/speech_to_text.py b/src/speaksure/speech_to_text.py
+index 5362cbd..4e9b9f3 100644
+--- a/src/speaksure/speech_to_text.py
++++ b/src/speaksure/speech_to_text.py
+@@ -7,6 +7,7 @@ import inspect
+ import io
+ import os
+ import sys
++import threading
+ from functools import lru_cache
+ from dataclasses import dataclass
+ from pathlib import Path
+@@ -355,12 +356,17 @@ def _cached_local_model(
+ 
+ 
+ _LOADED_LOCAL_DEVICES: dict[tuple[str, str], str] = {}
++# lru_cache does not stop two threads loading the same model at once (for
++# example the web warm-up thread and the first request). On a 6 GB GPU a double
++# load can run out of memory and silently fall back to slow CPU inference.
++_MODEL_LOAD_LOCK = threading.RLock()
+ 
+ 
+ def _load_local_model(
+     model_size: str, device_preference: str
+ ) -> tuple[WhisperModelLike, str, str]:
+-    result = _cached_local_model(model_size, device_preference)
++    with _MODEL_LOAD_LOCK:
++        result = _cached_local_model(model_size, device_preference)
+     _LOADED_LOCAL_DEVICES[(model_size, device_preference)] = result[1]
+     return result
+ 
+diff --git a/src/speaksure/text_to_speech.py b/src/speaksure/text_to_speech.py
+index 773eeb5..2eacc2d 100644
+--- a/src/speaksure/text_to_speech.py
++++ b/src/speaksure/text_to_speech.py
+@@ -5,6 +5,7 @@ from __future__ import annotations
+ import math
+ import subprocess
+ import sys
++import threading
+ import time
+ from dataclasses import dataclass
+ from pathlib import Path
+@@ -198,11 +199,19 @@ class PiperSpeechSynthesizer:
+         self.length_scale = length_scale
+         self._voice_loader = voice_loader or _load_piper_voice
+         self._voice: _PiperVoice | None = None
++        self._voice_lock = threading.Lock()
+ 
+     def _get_voice(self) -> _PiperVoice:
+-        """Load the configured voice once, raising an actionable error if absent."""
++        """Load the voice once, even if warm-up and a request race to do it."""
+         if self._voice is not None:
+             return self._voice
++        with self._voice_lock:
++            if self._voice is not None:
++                return self._voice
++            return self._load_voice()
++
++    def _load_voice(self) -> _PiperVoice:
++        """Load the configured voice, raising an actionable error if absent."""
+ 
+         model_path = self.models_dir / f"{self.voice_name}.onnx"
+         config_path = Path(f"{model_path}.json")
+diff --git a/tests/test_asr_benchmark.py b/tests/test_asr_benchmark.py
+index 9d37cdb..85b5173 100644
+--- a/tests/test_asr_benchmark.py
++++ b/tests/test_asr_benchmark.py
+@@ -115,5 +115,5 @@ def test_benchmark_outputs_group_counts_and_per_clip_word_errors(tmp_path):
+     assert "Word errors: [there->world]" in markdown
+     header = (tmp_path / "results.csv").read_text(encoding="utf-8").splitlines()[0]
+     assert header.endswith(
+-        "input_device,input_device_id,category,notes,word_level_errors"
++        "input_device,input_device_id,category,notes,accept,word_level_errors"
+     )
+diff --git a/tests/test_asr_evaluation.py b/tests/test_asr_evaluation.py
+index dae59dc..7c6acdd 100644
+--- a/tests/test_asr_evaluation.py
++++ b/tests/test_asr_evaluation.py
+@@ -72,6 +72,7 @@ def test_load_manifest_resolves_clips_and_parses_optional_fields(tmp_path):
+             "input_device_id": "",
+             "category": "",
+             "notes": "",
++            "accept": "",
+         }
+     ]
+ 

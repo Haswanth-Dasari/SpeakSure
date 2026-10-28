@@ -7,6 +7,7 @@ import inspect
 import io
 import os
 import sys
+import threading
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
@@ -355,12 +356,17 @@ def _cached_local_model(
 
 
 _LOADED_LOCAL_DEVICES: dict[tuple[str, str], str] = {}
+# lru_cache does not stop two threads loading the same model at once (for
+# example the web warm-up thread and the first request). On a 6 GB GPU a double
+# load can run out of memory and silently fall back to slow CPU inference.
+_MODEL_LOAD_LOCK = threading.RLock()
 
 
 def _load_local_model(
     model_size: str, device_preference: str
 ) -> tuple[WhisperModelLike, str, str]:
-    result = _cached_local_model(model_size, device_preference)
+    with _MODEL_LOAD_LOCK:
+        result = _cached_local_model(model_size, device_preference)
     _LOADED_LOCAL_DEVICES[(model_size, device_preference)] = result[1]
     return result
 

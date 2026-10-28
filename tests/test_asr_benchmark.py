@@ -115,5 +115,5 @@ def test_benchmark_outputs_group_counts_and_per_clip_word_errors(tmp_path):
     assert "Word errors: [there->world]" in markdown
     header = (tmp_path / "results.csv").read_text(encoding="utf-8").splitlines()[0]
     assert header.endswith(
-        "input_device,input_device_id,category,notes,word_level_errors"
+        "input_device,input_device_id,category,notes,accept,word_level_errors"
     )
