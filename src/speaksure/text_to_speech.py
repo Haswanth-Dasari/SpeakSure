@@ -227,6 +227,10 @@ class PiperSpeechSynthesizer:
             ) from error
         return self._voice
 
+    def warmup(self) -> None:
+        """Load the configured Piper voice before the first interview request."""
+        self._get_voice()
+
     def synthesize(self, text: str) -> SynthesizedAudio:
         """Synthesize non-empty text and return normalized mono audio."""
         if not text.strip():

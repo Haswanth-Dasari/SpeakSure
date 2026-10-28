@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
+import threading
 import time
 import wave
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 import numpy as np
 from fastapi import FastAPI, Request
@@ -46,6 +50,7 @@ from ..text_to_speech import (
     build_speech_synthesizer,
 )
 from ..analysis.session_analysis import analyze_session
+from ..analysis.grammar import _load_pipeline
 from ..report import render_report
 from .sessions import (
     WebSession,
@@ -68,6 +73,9 @@ STATIC_MIME_TYPES: dict[str, str] = {
     ".html": "text/html",
     ".svg": "image/svg+xml",
 }
+LOGGER = logging.getLogger(__name__)
+MODEL_COMPONENTS = ("stt", "tts", "spacy")
+QUESTION_COUNTS = {"quick": 3, "standard": 5, "full": 8}
 
 
 class TTSProvider(Protocol):
@@ -121,6 +129,7 @@ class WebServices:
     cache_dir: Path
     llm_configured: bool
     analysis_llm_factory: Callable[[], object] | None = None
+    warmup_functions: dict[str, Callable[[], object]] | None = None
 
 
 class ClientInfo(BaseModel):
@@ -133,10 +142,23 @@ class ClientInfo(BaseModel):
 class CreateSessionRequest(BaseModel):
     """Validated input for a new interview session."""
 
-    questions: StrictInt = Field(ge=3, le=10)
+    questions: StrictInt | None = Field(default=None, ge=3, le=10)
+    role: str | None = Field(default=None, min_length=1, max_length=60)
+    length: Literal["quick", "standard", "full"] = "standard"
     candidate_name: str | None = Field(default=None, max_length=120)
     vocabulary_hints: list[str] | str | None = Field(default=None)
     client: ClientInfo
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str | None) -> str | None:
+        """Trim a role and reject a value that is blank after trimming."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("role must contain between 1 and 60 non-space characters.")
+        return normalized
 
     @field_validator("vocabulary_hints", mode="before")
     @classmethod
@@ -171,7 +193,41 @@ def create_app(
     """Create a local interview API with replaceable services for offline tests."""
     active_settings = settings or WebSettings.from_env()
     active_services = services or _default_services(active_settings)
-    app = FastAPI(title="SpeakSure local interview API")
+    warmups = active_services.warmup_functions
+    initial_model_components = {
+        name: ("loading" if warmups is not None and name in warmups else "ready")
+        for name in MODEL_COMPONENTS
+    }
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        """Start background model warmup and close the analysis worker pool."""
+        def warm_models() -> None:
+            """Load each model independently and publish component readiness."""
+            for name in MODEL_COMPONENTS:
+                warmup = (warmups or {}).get(name)
+                if warmup is None:
+                    _app.state.model_components[name] = "ready"
+                    continue
+                try:
+                    warmup()
+                except Exception:
+                    LOGGER.exception("Could not preload the %s model.", name)
+                    _app.state.model_components[name] = "error"
+                else:
+                    _app.state.model_components[name] = "ready"
+
+        if warmups:
+            _app.state.model_warmup_thread = threading.Thread(
+                target=warm_models,
+                name="speaksure-model-warmup",
+                daemon=True,
+            )
+            _app.state.model_warmup_thread.start()
+        yield
+        _app.state.analysis_pool.shutdown(wait=False, cancel_futures=True)
+
+    app = FastAPI(title="SpeakSure local interview API", lifespan=lifespan)
     registry = WebSessionRegistry()
     app.state.registry = registry
     app.state.settings = active_settings
@@ -179,6 +235,7 @@ def create_app(
     app.state.analysis_pool = ThreadPoolExecutor(
         max_workers=2, thread_name_prefix="speaksure-analysis"
     )
+    app.state.model_components = initial_model_components
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -254,12 +311,23 @@ def create_app(
     def health() -> dict[str, object]:
         """Return model and voice configuration without disclosing credentials."""
         description = describe_stt_configuration(active_settings.stt_config)
-        model_loaded = (
-            getattr(active_services.stt_provider, "actual_device", "not-initialized")
-            != "not-initialized"
+        component_states = dict(app.state.model_components)
+        if (
+            warmups is None
+            and getattr(active_services.stt_provider, "actual_device", "not-initialized")
+            == "not-initialized"
+        ):
+            component_states["stt"] = "loading"
+        components = [
+            {"name": name, "status": component_states[name]}
+            for name in MODEL_COMPONENTS
+        ]
+        model_loaded = all(
+            component["status"] == "ready" for component in components
         )
         return {
             "status": "ok" if model_loaded else "loading",
+            "components": components,
             "stt_model": description["model"],
             "stt_device_setting": description["device_setting"],
             "tts_voice": active_settings.tts_config.voice_name,
@@ -269,10 +337,16 @@ def create_app(
     @app.post("/api/sessions")
     def create_session(payload: CreateSessionRequest) -> dict[str, object]:
         """Create and persist an interview session and expose its opening line."""
-        questions = select_questions(payload.questions)
+        question_count = (
+            payload.questions
+            if payload.questions is not None
+            else QUESTION_COUNTS[payload.length]
+        )
+        role = payload.role or active_settings.role
+        questions = select_questions(question_count)
         plan = InterviewPlan(
             questions=questions,
-            role=active_settings.role,
+            role=role,
             candidate_name=(payload.candidate_name or "").strip(),
         )
         interviewer = active_services.interviewer_factory(plan)
@@ -281,14 +355,27 @@ def create_app(
             "stt_model": active_settings.stt_config.model_size,
             "stt_device": "not-initialized",
             "tts_voice": active_settings.tts_config.voice_name,
-            "role": active_settings.role,
+            "role": role,
+            "length": payload.length,
             "capture_source": "browser",
             "input_device": payload.client.input_device_label,
             "capture_constraints": payload.client.constraints,
         }
         if payload.vocabulary_hints:
             metadata["vocabulary_hints"] = payload.vocabulary_hints
-        session = create_session_record(payload.questions, metadata)
+        session = create_session_record(question_count, metadata)
+        try:
+            _cache_spoken_line(
+                active_services,
+                session.session_id,
+                "opening",
+                opening.utterance,
+            )
+        except Exception:
+            LOGGER.exception("Could not synthesize the interview opening.")
+            return _error_response(
+                502, "tts_failed", "The opening interviewer audio could not be generated."
+            )
         session_path = active_services.sessions_dir / f"session_{session.session_id}.json"
         session.save_to(session_path)
         entry = WebSession(
@@ -315,26 +402,20 @@ def create_app(
 
     @app.get("/api/sessions/{session_id}/audio/{name}.wav")
     def spoken_audio(session_id: str, name: str) -> Response:
-        """Return a cached or newly synthesized spoken line as a WAV file."""
+        """Return a previously synthesized interviewer line as a WAV file."""
         entry = _get_session(registry, session_id)
         if entry is None:
             return _error_response(404, "session_not_found", "Session was not found.")
         if _AUDIO_NAME_PATTERN.fullmatch(name) is None:
             return _error_response(404, "audio_not_found", "Audio file was not found.")
-        text = entry.spoken_lines.get(name)
-        if text is None:
+        if name not in entry.spoken_lines:
             return _error_response(404, "audio_not_found", "Audio file was not found.")
         cache_path = active_services.cache_dir / session_id / f"{name}.wav"
-        try:
-            if not cache_path.is_file():
-                audio = active_services.tts_provider.synthesize(text)
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_bytes(wav_bytes(audio.samples, audio.sample_rate))
-            return Response(cache_path.read_bytes(), media_type="audio/wav")
-        except Exception:
+        if not cache_path.is_file():
             return _error_response(
-                502, "tts_failed", "The interviewer audio could not be generated."
+                404, "audio_not_ready", "The interviewer audio is not available."
             )
+        return Response(cache_path.read_bytes(), media_type="audio/wav")
 
     @app.post("/api/sessions/{session_id}/answer")
     async def answer(session_id: str, request: Request) -> JSONResponse:
@@ -372,6 +453,8 @@ def create_app(
             return _error_response(
                 409, "session_not_active", "Session is no longer accepting answers."
             )
+        except AudioSynthesisError as error:
+            return _error_response(502, "reply_audio_failed", str(error))
         except Exception:
             return _error_response(
                 500, "answer_processing_failed", "The answer could not be processed."
@@ -394,8 +477,6 @@ def create_app(
         with entry.lock:
             if entry.state in {"analyzing", "ready"}:
                 return JSONResponse({"status": entry.state})
-            if entry.state == "error":
-                return _error_response(409, "analysis_failed", entry.message)
             entry.content_requested = content_requested
             entry.session.metadata["completed"] = True
             entry.session.metadata["completed_at"] = datetime.now(
@@ -404,6 +485,8 @@ def create_app(
             entry.session.save_to(entry.session_path)
             entry.state = "analyzing"
             entry.message = "Analysis is running."
+            entry.stage = None
+            entry.progress = None
         app.state.analysis_pool.submit(
             _run_analysis, entry, active_settings, active_services
         )
@@ -430,9 +513,42 @@ def create_app(
             "state": entry.state,
             "message": entry.message,
         }
+        if entry.stage is not None:
+            response["stage"] = entry.stage
+        if entry.progress is not None:
+            response["progress"] = entry.progress
         if entry.state == "ready":
             response["report_url"] = f"/report/{session_id}"
         return JSONResponse(response)
+
+    @app.patch("/api/sessions/{session_id}/turns/{turn_index}/timing")
+    def update_turn_timing(
+        session_id: str,
+        turn_index: int,
+        request: Request,
+    ) -> JSONResponse:
+        """Persist browser-measured upload and answer-start timing for one turn."""
+        entry = _get_session(registry, session_id)
+        if entry is None:
+            return _error_response(404, "session_not_found", "Session was not found.")
+        upload_ms = _timing_header(request.headers.get("x-client-upload-ms"))
+        end_wait_ms = _timing_header(request.headers.get("x-client-end-wait-ms"))
+        if upload_ms is None or end_wait_ms is None:
+            return _error_response(
+                400, "invalid_timing", "Client timing headers must be finite non-negative milliseconds."
+            )
+        with entry.lock:
+            turn = next(
+                (item for item in entry.session.turns if item.index == turn_index),
+                None,
+            )
+            if turn is None:
+                return _error_response(404, "turn_not_found", "Turn was not found.")
+            timing = turn.analysis.setdefault("timing", {})
+            timing["upload_s"] = upload_ms / 1000
+            timing["end_wait_s"] = end_wait_ms / 1000
+            entry.session.save_to(entry.session_path)
+        return JSONResponse({"status": "ok"})
 
     @app.get("/report/{session_id}", response_class=HTMLResponse)
     def report(session_id: str) -> Response:
@@ -483,6 +599,12 @@ def _default_services(settings: WebSettings) -> WebServices:
             datetime.now(timezone.utc).isoformat(),
         )
 
+    def warmup_tts() -> None:
+        """Load the selected synthesis voice when the provider supports warmup."""
+        warmup = getattr(tts_provider, "warmup", None)
+        if callable(warmup):
+            warmup()
+
     return WebServices(
         stt_provider=stt_provider,
         tts_provider=tts_provider,
@@ -498,6 +620,11 @@ def _default_services(settings: WebSettings) -> WebServices:
         analysis_llm_factory=lambda: build_analysis_llm_client(
             GroqAnalysisLLMConfig.from_env()
         ),
+        warmup_functions={
+            "stt": stt_provider.warmup,
+            "tts": warmup_tts,
+            "spacy": _load_pipeline,
+        },
     )
 
 
@@ -513,6 +640,35 @@ def _get_session(
 def _audio_url(session_id: str, name: str) -> str:
     """Build the public route for one generated interviewer line."""
     return f"/api/sessions/{session_id}/audio/{name}.wav"
+
+
+def _cache_spoken_line(
+    services: WebServices,
+    session_id: str,
+    name: str,
+    text: str,
+) -> float:
+    """Synthesize and cache a spoken line, returning its synthesis duration."""
+    cache_path = services.cache_dir / session_id / f"{name}.wav"
+    if cache_path.is_file():
+        return 0.0
+    audio = services.tts_provider.synthesize(text)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(wav_bytes(audio.samples, audio.sample_rate))
+    return audio.synthesis_seconds
+
+
+def _timing_header(value: str | None) -> float | None:
+    """Parse a finite, non-negative browser timing value in milliseconds."""
+    if value is None:
+        return None
+    try:
+        milliseconds = float(value)
+    except ValueError:
+        return None
+    if not np.isfinite(milliseconds) or not 0 <= milliseconds <= 600_000:
+        return None
+    return milliseconds
 
 
 def _error_response(status: int, code: str, message: str) -> JSONResponse:
@@ -532,6 +688,10 @@ class UploadError(ValueError):
         self.status_code = status_code
         self.code = code
         self.message = message
+
+
+class AudioSynthesisError(RuntimeError):
+    """Represent a reply that could not be synthesized and cached."""
 
 
 async def _read_limited_body(request: Request) -> bytes:
@@ -641,10 +801,16 @@ def _process_web_answer(
             }
             if combined_hotwords is not None:
                 kwargs["hotwords"] = combined_hotwords
-            return services.stt_provider.transcribe_detailed(
-                audio_path.read_bytes(),
-                **kwargs,
-            )
+            entry.stage = "transcribing"
+            entry.progress = None
+            try:
+                return services.stt_provider.transcribe_detailed(
+                    audio_path.read_bytes(),
+                    **kwargs,
+                )
+            finally:
+                entry.stage = None
+                entry.progress = None
 
         processed: TurnProcessingResult = process_interview_turn(
             interviewer=entry.interviewer,
@@ -664,6 +830,17 @@ def _process_web_answer(
             audio_path_override=audio_path,
             safe_transcription_errors=True,
         )
+        if processed.turn is not None:
+            timing = processed.turn.analysis["timing"]
+            timing.update(
+                {
+                    "end_wait_s": None,
+                    "upload_s": None,
+                    "stt_s": timing.get("stt_seconds", 0.0),
+                    "llm_s": timing.get("llm_seconds"),
+                    "tts_s": None,
+                }
+            )
         entry.empty_attempts = processed.empty_attempts
         entry.listen_attempts = processed.listen_attempts
         entry.transcription_errors = list(processed.transcription_errors)
@@ -700,6 +877,23 @@ def _process_web_answer(
         entry.spoken_line_count += 1
         line_name = f"turn_{turn_index:02d}_{entry.spoken_line_count:04d}"
         entry.spoken_lines[line_name] = reply_text
+        try:
+            synthesis_seconds = _cache_spoken_line(
+                services,
+                entry.session.session_id,
+                line_name,
+                reply_text,
+            )
+        except Exception as error:
+            LOGGER.exception("Could not synthesize interviewer response.")
+            raise AudioSynthesisError(
+                "The interviewer response audio could not be generated."
+            ) from error
+        if processed.turn is not None:
+            timing = processed.turn.analysis["timing"]
+            timing["tts_s"] = synthesis_seconds
+            timing["tts_synthesis_seconds"] = synthesis_seconds
+            entry.session.save_to(entry.session_path)
         transcript = (
             processed.transcription.text if processed.transcription is not None else ""
         )
@@ -719,6 +913,7 @@ def _process_web_answer(
                 "audio_url": _audio_url(entry.session.session_id, line_name),
             },
             "finished": bool(getattr(entry.interviewer, "is_finished", False)),
+            "turn_recorded": processed.turn is not None,
         }
 
 
@@ -796,14 +991,29 @@ def _run_analysis(
                 analysis_llm = build_analysis_llm_client(
                     GroqAnalysisLLMConfig.from_env()
                 )
+        role = str(
+            entry.session.metadata.get("role", settings.role)
+        )
+
+        def update_progress(stage: str, progress: float) -> None:
+            """Publish one known analysis stage and its normalized progress."""
+            if stage not in {"transcribing", "delivery", "grammar", "content", "report"}:
+                return
+            with entry.lock:
+                entry.stage = stage
+                entry.progress = min(1.0, max(0.0, float(progress)))
+                entry.message = f"Preparing feedback: {stage}."
+
         analyzed = services.analysis_function(
             entry.session,
             audio_root=Path("."),
             llm=analysis_llm,
-            role=settings.role,
+            role=role,
+            progress_callback=update_progress,
         )
         analysis_path = services.analysis_dir / f"{entry.session.session_id}.analyzed.json"
         analyzed.save_to(analysis_path)
+        update_progress("report", 0.0)
         report_text = services.report_function(analyzed)
         report_path = services.reports_dir / f"{entry.session.session_id}.html"
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -812,6 +1022,8 @@ def _run_analysis(
             entry.report_path = report_path
             entry.state = "ready"
             entry.message = "Report is ready."
+            entry.stage = "report"
+            entry.progress = 1.0
     except Exception:
         with entry.lock:
             entry.state = "error"

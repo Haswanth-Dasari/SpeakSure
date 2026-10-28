@@ -26,6 +26,7 @@ htmlcov/
 # Editors and operating systems
 .vscode/
 .idea/
+NLP_Project.code-workspace
 .DS_Store
 Thumbs.db
 
@@ -33,6 +34,8 @@ Thumbs.db
 models/
 data/
 checkpoints/
+*.wav
+!tests/fixtures/*.wav
 *.pt
 *.pth
 *.ckpt

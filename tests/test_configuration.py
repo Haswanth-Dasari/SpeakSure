@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from src.speaksure import configuration
-from src.speaksure.ai_provider import ProviderConfig
 from src.speaksure.llm_client import GroqAnalysisLLMConfig, GroqLLMConfig
 from src.speaksure.speech_to_text import (
     LocalTranscriptionConfig,
@@ -207,10 +206,9 @@ def test_transcription_model_defaults_and_supports_environment_override(monkeypa
 def test_chat_provider_uses_shared_key_and_model_configuration(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "shared-test-key")
     monkeypatch.setenv("OPENAI_MODEL", "chat-test-model")
-    config = ProviderConfig.from_env()
 
-    assert config.api_key == "shared-test-key"
-    assert config.model == "chat-test-model"
+    assert configuration.get_api_key() == "shared-test-key"
+    assert configuration.get_chat_model() == "chat-test-model"
 
 
 def test_safe_diagnostic_does_not_return_key_and_reports_provider_configuration(

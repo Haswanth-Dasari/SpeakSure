@@ -169,3 +169,24 @@ test("VAD: 15s timeout fires if no speech detected", () => {
   assert.equal(stopReason, "timeout");
   assert.equal(frameCount * frameDurationSec, 15.0);
 });
+
+test("VAD: call-room no-speech timeout allows a silent upload at 20s", () => {
+  const sampleRate = 16000;
+  const frameDurationSec = 0.1;
+  const silence = new Float32Array(Math.round(sampleRate * frameDurationSec));
+  const vad = new VadDetector(sampleRate, { noSpeechTimeout: 20 });
+
+  let stopReason = null;
+  let frameCount = 0;
+  while (frameCount < 250) {
+    frameCount += 1;
+    const result = vad.processFrame(silence);
+    if (result.shouldStop) {
+      stopReason = result.stopReason;
+      break;
+    }
+  }
+
+  assert.equal(stopReason, "timeout");
+  assert.equal(frameCount * frameDurationSec, 20.0);
+});

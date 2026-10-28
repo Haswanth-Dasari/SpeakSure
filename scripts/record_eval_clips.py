@@ -191,9 +191,11 @@ def _record_until_choice(
     input_fn: Callable[[str], str],
     capture_fn: Callable[..., CapturedAnswer],
     output_fn: Callable[[str], None],
+    preroll_seconds: float = 0.3,
+    onset_frames: int = 4,
 ) -> CapturedAnswer | None:
     """Record one utterance and repeat or skip according to the student's choice."""
-    capture_settings = CaptureSettings(end_silence_seconds=2.5)
+    capture_settings = CaptureSettings(end_silence_seconds=2.5, preroll_seconds=preroll_seconds, onset_frames=onset_frames)
     while True:
         output_fn(prompt)
         captured = capture_fn(settings=capture_settings, device=input_device)
@@ -212,6 +214,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode.add_argument("--free", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--input-device", type=int)
+    parser.add_argument("--preroll-seconds", type=float, default=0.3)
+    parser.add_argument("--onset-frames", type=int, default=4)
     args = parser.parse_args(argv)
 
     input_device = describe_input_device(args.input_device)
@@ -241,6 +245,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             input_fn=input,
             capture_fn=record_answer,
             output_fn=print,
+            preroll_seconds=args.preroll_seconds,
+            onset_frames=args.onset_frames,
         )
         if captured is None:
             print("Skipped.")
@@ -265,6 +271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if category and category not in VALID_CATEGORIES:
             parser.error("Category must be plain, names, numbers, or natural.")
         notes = input("Notes (optional): ").strip()
+        settings_note = f"preroll_seconds={args.preroll_seconds:g}; onset_frames={args.onset_frames}"
+        notes = f"{notes}; {settings_note}" if notes else settings_note
         clip_path = append_evaluation_clip(
             EVAL_DIRECTORY,
             captured.samples,

@@ -35,6 +35,8 @@ class WebSession:
     transcription_errors: list[dict[str, object]] = field(default_factory=list)
     current_is_follow_up: bool = False
     content_requested: bool = False
+    stage: str | None = None
+    progress: float | None = None
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 

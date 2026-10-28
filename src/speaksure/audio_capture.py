@@ -71,6 +71,7 @@ class CapturedAnswer:
     stop_reason: str
     noise_rms: float
     threshold: float
+    end_wait_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -266,6 +267,7 @@ def capture_answer(
             stop_reason=stop_reason,
             noise_rms=noise_rms,
             threshold=threshold,
+            end_wait_seconds=trailing_silence * FRAME_SECONDS,
         )
     finally:
         close = getattr(iterator, "close", None)

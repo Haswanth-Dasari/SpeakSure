@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.speaksure.ai_provider import (
+from legacy.ai_provider import (
     MissingConfiguration, OpenAIConversationProvider, ProviderConfig, ProviderError,
     format_conversation_history, validate_response,
 )

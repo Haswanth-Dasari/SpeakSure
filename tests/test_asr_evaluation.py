@@ -18,6 +18,19 @@ def test_normalize_text_preserves_only_internal_apostrophes():
     assert normalize_text("  DON'T—stop, it's   fine!  ") == "don't stop it's fine"
 
 
+def test_extended_normalization_handles_spelling_time_and_ordinals():
+    from src.speaksure.evaluation.asr import normalize_extended
+    assert normalize_extended("Center at 9 a.m., 28th") == "center at 9 am 28"
+    assert normalize_extended("colour programme p.m.") == "color program pm"
+
+
+def test_bootstrap_seed_is_repeatable_for_tiny_hand_computable_case():
+    from src.speaksure.evaluation.asr import bootstrap_wer
+    # Two one-word clips (WER 0 and 1) have bootstrap samples with WER 0, 0.5, or 1.
+    pairs = [("a", "a"), ("a", "b")]
+    assert bootstrap_wer(pairs, resamples=20, seed=9) == bootstrap_wer(pairs, resamples=20, seed=9)
+
+
 def test_pooled_wer_weights_clips_by_reference_words():
     # Clip WERs are 1/4 and 2/1 (mean 1.125); pooled WER is 3/5 = 0.6.
     result = pooled_wer(

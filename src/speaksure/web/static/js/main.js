@@ -1,685 +1,651 @@
-/**
- * Main application orchestrator for SpeakSure interview client.
- * Coordinates Setup, Interview, and Results screens with an accessible state machine.
- */
-
-import {
-  getHealth,
-  listSessions,
-  createSession,
-  submitAnswer,
-  finishSession,
-  getSessionStatus,
-} from "./api.js";
-import {
-  AudioCaptureSession,
-  requestMicrophonePermission,
-  enumerateMicrophones,
-  isBluetoothOrHeadset,
-  runMicrophoneTest,
-} from "./audio.js";
+import { createSession, finishSession, getHealth, getSessionStatus, listSessions, submitAnswer } from "./api.js";
+import { AudioCaptureSession, isBluetoothOrHeadset, requestMicrophonePermission, runMicrophoneTest } from "./audio.js";
+import { InterviewerAudioPlayer } from "./interviewer-audio.js";
 import { VadDetector } from "./vad.js";
-import {
-  showScreen,
-  announce,
-  formatTime,
-  renderPastSessions,
-  updateLevelMeter,
-} from "./ui.js";
+import { announce, formatTime, renderPastSessions, updateLevelMeter } from "./ui.js";
 
-// Application State
-const appState = {
+const el = {
+  setup: document.getElementById("setup"),
+  form: document.getElementById("setup-form"),
+  name: document.getElementById("candidate-name"),
+  role: document.getElementById("role-select"),
+  otherRoleWrap: document.getElementById("other-role-wrap"),
+  otherRole: document.getElementById("other-role"),
+  hints: document.getElementById("vocabulary-hints"),
+  micSelect: document.getElementById("mic-select"),
+  grantMic: document.getElementById("grant-mic"),
+  testMic: document.getElementById("test-mic"),
+  micMeter: document.getElementById("mic-meter"),
+  micVerdict: document.getElementById("mic-verdict"),
+  bluetoothWarning: document.getElementById("bluetooth-warning"),
+  contentScoring: document.getElementById("content-scoring"),
+  contentScoringNote: document.getElementById("content-scoring-note"),
+  cameraPreview: document.getElementById("camera-preview"),
+  join: document.getElementById("join-room"),
+  joinWait: document.getElementById("join-wait"),
+  recentSessions: document.getElementById("recent-sessions"),
+  liveAnnouncer: document.getElementById("live-announcer"),
+  room: document.getElementById("room"),
+  roomRole: document.getElementById("room-role"),
+  roomStatus: document.getElementById("room-status"),
+  questionProgress: document.getElementById("question-progress"),
+  questionCount: document.getElementById("question-count"),
+  clock: document.getElementById("clock"),
+  orb: document.getElementById("orb"),
+  caption: document.getElementById("caption"),
+  avatar: document.getElementById("avatar"),
+  avatarRing: document.getElementById("avatar-ring"),
+  roomMeter: document.getElementById("room-meter"),
+  camera: document.getElementById("camera"),
+  timingWarning: document.getElementById("timing-warning"),
+  captions: document.getElementById("captions-toggle"),
+  repeat: document.getElementById("repeat-question"),
+  end: document.getElementById("end-interview"),
+  dialog: document.getElementById("end-dialog"),
+  confirmEnd: document.getElementById("confirm-end"),
+  callStage: document.getElementById("call-stage"),
+  footer: document.getElementById("room-footer"),
+  preparing: document.getElementById("preparing"),
+  analysisStatus: document.getElementById("analysis-status"),
+  analysisProgress: document.getElementById("analysis-progress"),
+  analysisElapsed: document.getElementById("analysis-elapsed"),
+  analysisError: document.getElementById("analysis-error"),
+  retryAnalysis: document.getElementById("retry-analysis"),
+  reportView: document.getElementById("report-view"),
+  reportFrame: document.getElementById("report-frame"),
+  openReport: document.getElementById("open-report"),
+  downloadReport: document.getElementById("download-report"),
+  newInterview: document.getElementById("new-interview"),
+};
+
+const app = {
   health: null,
-  selectedDeviceId: "",
-  selectedDeviceLabel: "",
-  activeSessionId: null,
+  modelsReady: false,
+  microphoneGranted: false,
+  deviceId: "",
+  deviceLabel: "",
+  sessionId: null,
   questionIndex: 1,
   totalQuestions: 5,
-  isFollowUp: false,
-  includeContentScoring: false,
-  reviewBeforeSending: false,
-  candidateName: "",
-  vocabularyHints: null,
-  captureSession: null,
-  timerInterval: null,
-  recordingStartTime: 0,
-  lastRecordedWav: null,
-  lastRecordedBlob: null,
-  interviewerAudio: new Audio(),
-  pollTimer: null,
+  currentLine: "",
+  captionsOn: false,
+  interviewer: new InterviewerAudioPlayer(),
+  capture: null,
+  cameraStream: null,
+  vad: null,
+  heardSpeech: false,
+  hintShown: false,
+  firstSpeechAt: null,
+  answerStartedAt: 0,
+  endWaitMs: 0,
+  roomStartedAt: 0,
+  roomTimer: null,
+  answerTimer: null,
+  hintTimer: null,
+  analysisStartedAt: 0,
+  active: false,
+  orbLevel: 0,
 };
 
-// DOM Elements
-const el = {
-  liveAnnouncer: document.getElementById("live-announcer"),
+const sleep = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
-  // Setup Screen
-  setupForm: document.getElementById("setup-form"),
-  questionsInput: document.getElementById("questions-count"),
-  nameInput: document.getElementById("candidate-name"),
-  hintsInput: document.getElementById("vocabulary-hints"),
-  contentScoringCheck: document.getElementById("content-scoring-check"),
-  contentScoringNote: document.getElementById("content-scoring-note"),
-  reviewCheck: document.getElementById("review-check"),
-  grantMicBtn: document.getElementById("grant-mic-btn"),
-  micSelect: document.getElementById("mic-select"),
-  bluetoothWarning: document.getElementById("bluetooth-warning"),
-  testMicBtn: document.getElementById("test-mic-btn"),
-  testMeterContainer: document.getElementById("test-meter-container"),
-  testMeterBar: document.getElementById("test-meter-bar"),
-  testAssessment: document.getElementById("test-assessment"),
-  testAudioPlayback: document.getElementById("test-audio-playback"),
-  sttStatusBadge: document.getElementById("stt-status-badge"),
-  startInterviewBtn: document.getElementById("start-interview-btn"),
-  pastSessionsContainer: document.getElementById("past-sessions-container"),
+function setRoomState(state, message) {
+  el.room.dataset.state = state;
+  el.roomStatus.textContent = message;
+  announce(el.liveAnnouncer, message);
+  el.end.disabled = state === "thinking";
+  el.confirmEnd.disabled = state === "thinking";
+}
 
-  // Interview Screen
-  turnIndicator: document.getElementById("turn-indicator"),
-  questionText: document.getElementById("question-text"),
-  statusBadge: document.getElementById("interview-status-badge"),
-  playQuestionBtn: document.getElementById("play-question-btn"),
-  listeningPanel: document.getElementById("listening-panel"),
-  listeningMeterBar: document.getElementById("listening-meter-bar"),
-  timerDisplay: document.getElementById("timer-display"),
-  stopAnsweringBtn: document.getElementById("stop-answering-btn"),
-  endEarlyBtn: document.getElementById("end-early-btn"),
-  noSpeechNotice: document.getElementById("no-speech-notice"),
-  retryNoSpeechBtn: document.getElementById("retry-no-speech-btn"),
-  reviewPanel: document.getElementById("review-panel"),
-  reviewAudio: document.getElementById("review-audio"),
-  sendAnswerBtn: document.getElementById("send-answer-btn"),
-  rerecordBtn: document.getElementById("rerecord-btn"),
-  uploadErrorNotice: document.getElementById("upload-error-notice"),
-  uploadErrorMessage: document.getElementById("upload-error-message"),
-  retryUploadBtn: document.getElementById("retry-upload-btn"),
-  transcriptCard: document.getElementById("transcript-card"),
-  transcriptText: document.getElementById("transcript-text"),
-  transcriptFlags: document.getElementById("transcript-flags"),
+function updateCaption() {
+  el.caption.textContent = app.captionsOn ? app.currentLine : "";
+  el.caption.classList.toggle("hidden", !app.captionsOn || !app.currentLine);
+}
 
-  // Results Screen
-  resultsStatus: document.getElementById("results-status"),
-  resultsProgressBar: document.getElementById("results-progress-bar"),
-  reportContainer: document.getElementById("report-container"),
-  reportFrame: document.getElementById("report-frame"),
-  resultsActions: document.getElementById("results-actions"),
-  openNewTabBtn: document.getElementById("open-new-tab-btn"),
-  newInterviewBtn: document.getElementById("new-interview-btn"),
-  resultsErrorNotice: document.getElementById("results-error-notice"),
-  resultsErrorMessage: document.getElementById("results-error-message"),
-  retryResultsBtn: document.getElementById("retry-results-btn"),
-};
+function initials(name) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "S";
+  return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+}
 
-// -------------------------------------------------------------
-// INITIALIZATION
-// -------------------------------------------------------------
-async function initApp() {
-  showScreen("setup");
-  announce(el.liveAnnouncer, "SpeakSure setup loaded.");
+function selectedLength() {
+  return document.querySelector('input[name="length"]:checked')?.value || "standard";
+}
 
-  // Check remembered mic device
+function selectedRole() {
+  return el.role.value === "Other" ? el.otherRole.value.trim() : el.role.value;
+}
+
+function updateJoinAvailability() {
+  const roleOk = selectedRole().length > 0 && selectedRole().length <= 60;
+  el.join.disabled = !app.microphoneGranted || !app.modelsReady || !roleOk || app.active;
+  const pending = [];
+  if (!app.microphoneGranted) pending.push("microphone access");
+  if (!app.modelsReady) pending.push("speech and feedback models");
+  if (!roleOk) pending.push("a role");
+  if (!el.joinWait.textContent.startsWith("Models could not be loaded:")) {
+    el.joinWait.textContent = pending.length
+      ? `Waiting for ${pending.join(" and ")}.`
+      : "Microphone and models are ready.";
+  }
+}
+
+function renderModelHealth(health) {
+  app.health = health;
+  const components = Array.isArray(health.components) ? health.components : [];
+  app.modelsReady = health.status === "ok"
+    && ["stt", "tts", "spacy"].every((name) =>
+      components.some((component) => component.name === name && component.status === "ready"));
+  const failedComponents = components
+    .filter((component) => component.status === "error")
+    .map((component) => component.name);
+  if (failedComponents.length) {
+    el.joinWait.textContent = `Models could not be loaded: ${failedComponents.join(", ")}. Restart the server after checking its model setup.`;
+  }
+  if (health.llm_configured) {
+    el.contentScoring.disabled = false;
+    el.contentScoringNote.textContent = "";
+    el.contentScoringNote.classList.add("hidden");
+  } else {
+    el.contentScoring.disabled = true;
+    el.contentScoring.checked = false;
+    el.contentScoringNote.textContent = "AI content scoring is unavailable because the server has no scoring model configured.";
+    el.contentScoringNote.classList.remove("hidden");
+  }
+  updateJoinAvailability();
+}
+
+async function pollHealth() {
   try {
-    const savedDeviceId = localStorage.getItem("speaksure_selected_mic");
-    if (savedDeviceId) {
-      appState.selectedDeviceId = savedDeviceId;
-    }
+    renderModelHealth(await getHealth());
   } catch {
-    // LocalStorage might be restricted
+    app.modelsReady = false;
+    el.joinWait.textContent = "The server’s model status is unavailable. Reconnecting…";
+    updateJoinAvailability();
   }
-
-  // Fetch health diagnostics
-  try {
-    const health = await getHealth();
-    appState.health = health;
-    el.sttStatusBadge.textContent = `STT: ${health.stt_model} (${health.status === "ok" ? "Ready" : "Loading…"})`;
-    if (!health.llm_configured) {
-      el.contentScoringCheck.disabled = true;
-      el.contentScoringCheck.checked = false;
-      el.contentScoringNote.textContent = "AI content scoring requires Groq API key configuration on the server.";
-      el.contentScoringNote.classList.remove("hidden");
-    } else {
-      el.contentScoringCheck.disabled = false;
-      el.contentScoringNote.classList.add("hidden");
-    }
-  } catch (err) {
-    el.sttStatusBadge.textContent = "STT: Offline";
-  }
-
-  // Load past sessions
-  loadPastSessionsList();
-
-  // Attach event handlers
-  setupEventHandlers();
 }
 
-async function loadPastSessionsList() {
+async function loadRecentSessions() {
   try {
-    const sessions = await listSessions();
-    renderPastSessions(el.pastSessionsContainer, sessions);
+    renderPastSessions(el.recentSessions, await listSessions());
   } catch {
-    renderPastSessions(el.pastSessionsContainer, []);
+    el.recentSessions.textContent = "Recent sessions could not be loaded.";
   }
 }
 
-// -------------------------------------------------------------
-// SETUP HANDLERS
-// -------------------------------------------------------------
-function setupEventHandlers() {
-  // Microphone permission & selection
-  el.grantMicBtn.addEventListener("click", async () => {
-    try {
-      el.grantMicBtn.disabled = true;
-      el.grantMicBtn.textContent = "Requesting permission…";
-      const devices = await requestMicrophonePermission();
-      populateMicrophoneList(devices);
-      el.grantMicBtn.textContent = "Permission granted";
-    } catch (err) {
-      el.grantMicBtn.disabled = false;
-      el.grantMicBtn.textContent = "Grant microphone";
-      alert("Microphone permission was denied. Please allow microphone access in your browser settings.");
-    }
-  });
-
-  el.micSelect.addEventListener("change", () => {
-    const selectedOption = el.micSelect.options[el.micSelect.selectedIndex];
-    appState.selectedDeviceId = el.micSelect.value;
-    appState.selectedDeviceLabel = selectedOption ? selectedOption.text : "";
-    try {
-      localStorage.setItem("speaksure_selected_mic", appState.selectedDeviceId);
-    } catch {}
-    checkBluetoothWarning(appState.selectedDeviceLabel);
-    checkCanStart();
-  });
-
-  // Test microphone button (3 seconds)
-  el.testMicBtn.addEventListener("click", async () => {
-    el.testMicBtn.disabled = true;
-    el.testAssessment.textContent = "Recording 3 seconds… please speak clearly.";
-    el.testAssessment.className = "test-assessment-badge";
-    el.testMeterContainer.classList.remove("hidden");
-    el.testAudioPlayback.classList.add("hidden");
-
-    try {
-      const testResult = await runMicrophoneTest(appState.selectedDeviceId, (rms) => {
-        updateLevelMeter(el.testMeterBar, rms);
-      });
-
-      el.testAssessment.textContent = testResult.assessment;
-      if (testResult.assessment === "Good level") {
-        el.testAssessment.classList.add("assessment-good");
-      } else {
-        el.testAssessment.classList.add("assessment-warn");
-      }
-
-      el.testAudioPlayback.src = URL.createObjectURL(testResult.wavBlob);
-      el.testAudioPlayback.classList.remove("hidden");
-    } catch (err) {
-      el.testAssessment.textContent = "Test failed: " + (err.message || "Microphone error");
-      el.testAssessment.classList.add("assessment-warn");
-    } finally {
-      el.testMicBtn.disabled = false;
-      updateLevelMeter(el.testMeterBar, 0);
-    }
-  });
-
-  // Start interview form submit
-  el.setupForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    await handleStartInterview();
-  });
-
-  // Interview actions
-  el.playQuestionBtn.addEventListener("click", () => {
-    el.playQuestionBtn.classList.add("hidden");
-    appState.interviewerAudio.play().catch(() => {
-      // If still blocked, advance directly to listening
-      startListeningTurn();
-    });
-  });
-
-  el.stopAnsweringBtn.addEventListener("click", () => {
-    handleStopAnswering();
-  });
-
-  el.retryNoSpeechBtn.addEventListener("click", () => {
-    el.noSpeechNotice.classList.add("hidden");
-    startListeningTurn();
-  });
-
-  el.retryUploadBtn.addEventListener("click", async () => {
-    el.uploadErrorNotice.classList.add("hidden");
-    if (appState.lastRecordedBlob) {
-      await uploadAnswerBlob(appState.lastRecordedBlob);
-    }
-  });
-
-  el.sendAnswerBtn.addEventListener("click", async () => {
-    el.reviewPanel.classList.add("hidden");
-    if (appState.lastRecordedBlob) {
-      await uploadAnswerBlob(appState.lastRecordedBlob);
-    }
-  });
-
-  el.rerecordBtn.addEventListener("click", () => {
-    el.reviewPanel.classList.add("hidden");
-    startListeningTurn();
-  });
-
-  el.endEarlyBtn.addEventListener("click", () => {
-    const confirmEnd = window.confirm(
-      "Are you sure you want to end this interview early? Your answers so far will be saved and analyzed."
-    );
-    if (confirmEnd) {
-      handleEndInterviewEarly();
-    }
-  });
-
-  // Results actions
-  el.newInterviewBtn.addEventListener("click", () => {
-    resetToSetup();
-  });
-
-  el.retryResultsBtn.addEventListener("click", () => {
-    el.resultsErrorNotice.classList.add("hidden");
-    pollSessionStatus(appState.activeSessionId);
-  });
-}
-
-function populateMicrophoneList(devices) {
-  el.micSelect.innerHTML = "";
-  if (devices.length === 0) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "No microphone found";
-    el.micSelect.appendChild(opt);
+function populateMicrophones(devices) {
+  el.micSelect.textContent = "";
+  if (!devices.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No microphone found";
+    el.micSelect.appendChild(option);
     el.micSelect.disabled = true;
-    el.startInterviewBtn.disabled = true;
+    app.microphoneGranted = false;
+    app.deviceId = "";
+    app.deviceLabel = "";
+    el.micVerdict.textContent = "No microphone found";
+    updateJoinAvailability();
     return;
   }
-
   devices.forEach((device, index) => {
-    const opt = document.createElement("option");
-    opt.value = device.deviceId;
-    opt.textContent = device.label || `Microphone ${index + 1}`;
-    if (device.deviceId === appState.selectedDeviceId) {
-      opt.selected = true;
-    }
-    el.micSelect.appendChild(opt);
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = device.label || `Microphone ${index + 1}`;
+    if (device.deviceId === app.deviceId) option.selected = true;
+    el.micSelect.appendChild(option);
   });
-
   el.micSelect.disabled = false;
-  const currentOption = el.micSelect.options[el.micSelect.selectedIndex];
-  appState.selectedDeviceId = el.micSelect.value;
-  appState.selectedDeviceLabel = currentOption ? currentOption.text : "";
-  checkBluetoothWarning(appState.selectedDeviceLabel);
-  checkCanStart();
+  app.microphoneGranted = true;
+  app.deviceId = el.micSelect.value;
+  app.deviceLabel = el.micSelect.selectedOptions[0]?.textContent || "Unknown microphone";
+  el.micVerdict.textContent = "Ready to test";
+  el.testMic.disabled = false;
+  el.grantMic.textContent = "Permission granted";
+  el.grantMic.disabled = true;
+  el.bluetoothWarning.classList.toggle("hidden", !isBluetoothOrHeadset(app.deviceLabel));
+  updateJoinAvailability();
 }
 
-function checkBluetoothWarning(label) {
-  if (isBluetoothOrHeadset(label)) {
-    el.bluetoothWarning.classList.remove("hidden");
-  } else {
-    el.bluetoothWarning.classList.add("hidden");
+async function grantMicrophone() {
+  el.grantMic.disabled = true;
+  el.grantMic.textContent = "Requesting access…";
+  try {
+    const devices = await requestMicrophonePermission();
+    populateMicrophones(devices);
+    if (app.microphoneGranted) el.micVerdict.textContent = "Ready to test";
+  } catch {
+    app.microphoneGranted = false;
+    el.grantMic.disabled = false;
+    el.grantMic.textContent = "Allow microphone";
+    el.micVerdict.textContent = "Microphone access was not granted";
+    updateJoinAvailability();
   }
 }
 
-function checkCanStart() {
-  const hasMic = Boolean(appState.selectedDeviceId || el.micSelect.value);
-  el.startInterviewBtn.disabled = !hasMic;
-  el.testMicBtn.disabled = !hasMic;
+async function testMicrophone() {
+  el.testMic.disabled = true;
+  el.micVerdict.textContent = "Speak now…";
+  try {
+    const result = await runMicrophoneTest(app.deviceId, (level) => updateLevelMeter(el.micMeter, level));
+    el.micVerdict.textContent = result.assessment;
+  } catch {
+    el.micVerdict.textContent = "Microphone test failed";
+  } finally {
+    el.testMic.disabled = !app.microphoneGranted;
+  }
 }
 
-// -------------------------------------------------------------
-// INTERVIEW FLOW
-// -------------------------------------------------------------
-async function handleStartInterview() {
-  const questionsCount = parseInt(el.questionsInput.value, 10) || 5;
-  const candidateName = el.nameInput.value.trim();
-  const rawHints = el.hintsInput.value.trim();
-  const includeContent = el.contentScoringCheck.checked && !el.contentScoringCheck.disabled;
-  const reviewBeforeSending = el.reviewCheck.checked;
+function updateQuestionProgress() {
+  el.questionProgress.textContent = "";
+  for (let index = 1; index <= app.totalQuestions; index += 1) {
+    const segment = document.createElement("span");
+    segment.className = "progress-segment";
+    if (index < app.questionIndex) segment.classList.add("done");
+    if (index === app.questionIndex) segment.classList.add("current");
+    el.questionProgress.appendChild(segment);
+  }
+  const label = `Question ${app.questionIndex} of ${app.totalQuestions}`;
+  el.questionCount.textContent = label;
+  el.questionProgress.setAttribute("aria-label", label);
+}
 
-  appState.totalQuestions = questionsCount;
-  appState.candidateName = candidateName;
-  appState.includeContentScoring = includeContent;
-  appState.reviewBeforeSending = reviewBeforeSending;
-  appState.vocabularyHints = rawHints ? rawHints : null;
+function refreshRepeatButton() {
+  const canRepeat = Boolean(app.interviewer.lastBuffer)
+    && app.room.dataset.state !== "speaking"
+    && app.room.dataset.state !== "thinking"
+    && (!app.heardSpeech || app.room.dataset.state !== "listening");
+  el.repeat.disabled = !canRepeat;
+}
 
-  el.startInterviewBtn.disabled = true;
-  el.startInterviewBtn.textContent = "Creating session…";
-
+async function startCameraPreview() {
+  if (!el.cameraPreview.checked) return;
   try {
-    const sessionData = await createSession({
-      questions: questionsCount,
-      candidateName: candidateName || undefined,
-      vocabularyHints: appState.vocabularyHints || undefined,
-      inputDeviceLabel: appState.selectedDeviceLabel,
+    app.cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    el.camera.srcObject = app.cameraStream;
+    el.camera.classList.remove("hidden");
+  } catch {
+    app.cameraStream = null;
+  }
+}
+
+function stopCameraPreview() {
+  if (app.cameraStream) app.cameraStream.getTracks().forEach((track) => track.stop());
+  app.cameraStream = null;
+  el.camera.srcObject = null;
+  el.camera.classList.add("hidden");
+}
+
+function releaseCapture() {
+  if (app.capture) {
+    app.capture.release();
+    app.capture = null;
+  }
+  if (app.answerTimer) window.clearInterval(app.answerTimer);
+  if (app.hintTimer) window.clearInterval(app.hintTimer);
+  app.answerTimer = null;
+  app.hintTimer = null;
+}
+
+function stopClock() {
+  if (app.roomTimer) window.clearInterval(app.roomTimer);
+  app.roomTimer = null;
+}
+
+async function joinRoom(event) {
+  event.preventDefault();
+  if (el.join.disabled) return;
+  const unlockPromise = app.interviewer.unlock();
+  app.active = true;
+  updateJoinAvailability();
+  el.join.textContent = "Joining…";
+  try {
+    await unlockPromise;
+    const session = await createSession({
+      role: selectedRole(),
+      length: selectedLength(),
+      candidateName: el.name.value,
+      vocabularyHints: el.hints.value.trim() || undefined,
+      inputDeviceLabel: app.deviceLabel,
       constraints: {},
     });
-
-    appState.activeSessionId = sessionData.session_id;
-    appState.questionIndex = sessionData.question_index;
-    appState.totalQuestions = sessionData.total_main_questions;
-    appState.isFollowUp = false;
-
-    // Transition to interview screen
-    showScreen("interview");
-    presentQuestion(
-      sessionData.first_question.text,
-      sessionData.first_question.audio_url,
-      false
-    );
-  } catch (err) {
-    alert("Could not start interview session: " + (err.message || "Unknown error"));
-    el.startInterviewBtn.disabled = false;
-    el.startInterviewBtn.textContent = "Start interview";
+    app.sessionId = session.session_id;
+    app.questionIndex = session.question_index;
+    app.totalQuestions = session.total_main_questions;
+    app.roomRole.textContent = selectedRole();
+    app.avatar.textContent = initials(el.name.value);
+    updateQuestionProgress();
+    el.setup.classList.add("hidden");
+    el.room.classList.remove("hidden");
+    app.roomStartedAt = performance.now();
+    app.roomTimer = window.setInterval(() => {
+      el.clock.textContent = formatTime((performance.now() - app.roomStartedAt) / 1000);
+    }, 500);
+    await startCameraPreview();
+    await speakInterviewerLine(session.first_question.text, session.first_question.audio_url);
+    await sleep(250);
+    await startListening();
+  } catch (error) {
+    if (!app.sessionId) {
+      app.active = false;
+      el.join.textContent = "Join the interview room";
+      updateJoinAvailability();
+      el.joinWait.textContent = error.message || "The interview could not be started.";
+      announce(el.liveAnnouncer, el.joinWait.textContent);
+    } else {
+      setRoomState("error", error.message || "The interview could not be started.");
+    }
   }
 }
 
-function presentQuestion(text, audioUrl, isFollowUp) {
-  appState.isFollowUp = isFollowUp;
-  const turnLabel = isFollowUp
-    ? `Question ${appState.questionIndex} of ${appState.totalQuestions} (Follow-up)`
-    : `Question ${appState.questionIndex} of ${appState.totalQuestions}`;
+async function speakInterviewerLine(text, audioUrl) {
+  app.currentLine = text;
+  updateCaption();
+  setRoomState("speaking", "Interviewer is speaking");
+  el.repeat.disabled = true;
+  await app.interviewer.playUrl(audioUrl);
+}
 
-  el.turnIndicator.textContent = turnLabel;
-  el.questionText.textContent = text;
-  el.statusBadge.textContent = "Interviewer is speaking";
-  el.statusBadge.className = "status-badge status-speaking";
-  announce(el.liveAnnouncer, `${turnLabel}: ${text}`);
+async function startListening() {
+  releaseCapture();
+  app.heardSpeech = false;
+  app.hintShown = false;
+  app.firstSpeechAt = null;
+  app.endWaitMs = 0;
+  app.vad = new VadDetector(16000, { noSpeechTimeout: 20 });
+  app.capture = new AudioCaptureSession();
+  app.answerStartedAt = performance.now();
+  setRoomState("listening", "Your turn · listening");
+  updateLevelMeter(el.roomMeter, 0);
+  el.avatarRing.classList.remove("active");
+  refreshRepeatButton();
+  try {
+    await app.capture.start(
+      app.deviceId,
+      (frame) => {
+        const result = app.vad.processFrame(frame);
+        if (result.isSpeech && app.firstSpeechAt === null) {
+          app.firstSpeechAt = performance.now();
+          app.endWaitMs = app.firstSpeechAt - app.answerStartedAt;
+          app.heardSpeech = true;
+          el.avatarRing.classList.add("active");
+          el.repeat.classList.remove("repeat-hint");
+          setRoomState("listening", "Your turn · listening");
+          refreshRepeatButton();
+        }
+        if (result.shouldStop) void finishListening(result.stopReason !== "timeout");
+      },
+      (level) => {
+        updateLevelMeter(el.roomMeter, level);
+        el.avatarRing.style.boxShadow = `0 0 0 ${Math.min(14, level * 34)}px color-mix(in srgb, var(--teal) 30%, transparent)`;
+      },
+    );
+    app.hintTimer = window.setInterval(() => {
+      const elapsed = (performance.now() - app.answerStartedAt) / 1000;
+      if (!app.heardSpeech && elapsed >= 8 && !app.hintShown) {
+        app.hintShown = true;
+        setRoomState("listening", "Take your time. You can repeat the question.");
+        el.repeat.classList.add("repeat-hint");
+        refreshRepeatButton();
+      }
+    }, 250);
+  } catch {
+    releaseCapture();
+    setRoomState("error", "Microphone access ended. Allow microphone access and try again.");
+  }
+}
 
-  // Hide panels
-  el.listeningPanel.classList.add("hidden");
-  el.reviewPanel.classList.add("hidden");
-  el.noSpeechNotice.classList.add("hidden");
-  el.uploadErrorNotice.classList.add("hidden");
+async function finishListening(trimSilence) {
+  if (!app.capture?.isRecording) return;
+  if (app.answerTimer) window.clearInterval(app.answerTimer);
+  if (app.hintTimer) window.clearInterval(app.hintTimer);
+  app.answerTimer = null;
+  app.hintTimer = null;
+  el.repeat.classList.remove("repeat-hint");
+  setRoomState("thinking", "Thinking about your answer…");
+  el.avatarRing.classList.remove("active");
+  refreshRepeatButton();
+  const thinkingStartedAt = performance.now();
+  try {
+    const capture = app.capture;
+    const recording = await capture.stop({ trimSilence });
+    capture.release();
+    app.capture = null;
+    const result = await submitAnswer(app.sessionId, recording.wavBlob, app.endWaitMs);
+    const thinkingRemaining = 600 - (performance.now() - thinkingStartedAt);
+    if (thinkingRemaining > 0) await sleep(thinkingRemaining);
+    if (result.timing_warning) {
+      el.timingWarning.textContent = result.timing_warning;
+      el.timingWarning.classList.remove("hidden");
+    } else {
+      el.timingWarning.classList.add("hidden");
+    }
 
-  // Play interviewer audio
-  appState.interviewerAudio.pause();
-  appState.interviewerAudio.src = audioUrl;
+    const reply = result.interviewer;
+    if (reply.action === "next_question") {
+      app.questionIndex = Math.min(app.questionIndex + 1, app.totalQuestions);
+      updateQuestionProgress();
+    }
+    await speakInterviewerLine(reply.text, reply.audio_url);
+    if (result.finished || reply.action === "finish") {
+      await prepareFeedback();
+      return;
+    }
+    await sleep(250);
+    await startListening();
+  } catch (error) {
+    releaseCapture();
+    setRoomState("error", error.message || "The answer could not be sent. Please try again.");
+    el.repeat.classList.remove("repeat-hint");
+  }
+}
 
-  appState.interviewerAudio.onended = () => {
-    startListeningTurn();
-  };
+async function repeatQuestion() {
+  if (el.repeat.disabled || !app.interviewer.lastBuffer) return;
+  if (app.room.dataset.state === "listening") {
+    if (app.heardSpeech) return;
+    releaseCapture();
+  }
+  el.repeat.classList.remove("repeat-hint");
+  setRoomState("speaking", "Interviewer is repeating the question");
+  el.repeat.disabled = true;
+  try {
+    await app.interviewer.replay();
+    await sleep(250);
+    await startListening();
+  } catch {
+    setRoomState("error", "The question could not be repeated.");
+  }
+}
 
-  appState.interviewerAudio.onerror = () => {
-    // If TTS audio fails, start listening after a brief pause
-    setTimeout(() => {
-      startListeningTurn();
-    }, 1000);
-  };
+function openEndDialog() {
+  if (!el.dialog.open) el.dialog.showModal();
+}
 
-  appState.interviewerAudio.play().catch(() => {
-    // Autoplay blocked: show explicit play button
-    el.playQuestionBtn.classList.remove("hidden");
+async function confirmEndInterview(event) {
+  if (event) event.preventDefault();
+  if (el.dialog.open) el.dialog.close();
+  await prepareFeedback();
+}
+
+async function prepareFeedback() {
+  releaseCapture();
+  stopCameraPreview();
+  stopClock();
+  await app.interviewer.release();
+  el.callStage.classList.add("hidden");
+  el.footer.classList.add("hidden");
+  el.preparing.classList.remove("hidden");
+  setRoomState("thinking", "Preparing your feedback");
+  el.analysisStartedAt = performance.now();
+  el.analysisError.classList.add("hidden");
+  el.retryAnalysis.classList.add("hidden");
+  el.analysisProgress.style.width = "0%";
+  el.analysisStatus.textContent = "Getting your interview ready…";
+  announce(el.liveAnnouncer, "Preparing your feedback.");
+  await requestAnalysis();
+}
+
+async function requestAnalysis() {
+  try {
+    await finishSession(app.sessionId, el.contentScoring.checked && !el.contentScoring.disabled);
+    await pollAnalysis();
+  } catch (error) {
+    showAnalysisError(error.message || "Feedback could not be prepared.");
+  }
+}
+
+const stageLabels = {
+  transcribing: "Transcribing",
+  delivery: "Checking delivery",
+  grammar: "Checking grammar",
+  content: "Scoring answer content",
+  report: "Building your report",
+};
+
+async function pollAnalysis() {
+  const deadline = performance.now() + 300_000;
+  while (performance.now() < deadline) {
+    try {
+      const status = await getSessionStatus(app.sessionId);
+      const elapsed = (performance.now() - app.analysisStartedAt) / 1000;
+      el.analysisElapsed.textContent = `Elapsed · ${formatTime(elapsed)}`;
+      if (status.stage && stageLabels[status.stage]) {
+        const percent = Number.isFinite(status.progress) ? Math.round(status.progress * 100) : null;
+        el.analysisStatus.textContent = percent === null
+          ? stageLabels[status.stage]
+          : `${stageLabels[status.stage]} · ${percent}%`;
+        if (percent !== null) el.analysisProgress.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      } else {
+        el.analysisStatus.textContent = status.message || `Preparing your feedback · ${Math.floor(elapsed)} seconds`;
+      }
+      if (status.state === "ready" && status.report_url) {
+        showReport(status.report_url);
+        return;
+      }
+      if (status.state === "error") {
+        showAnalysisError(status.message || "Feedback could not be prepared.");
+        return;
+      }
+    } catch (error) {
+      showAnalysisError(error.message || "The feedback status could not be checked.");
+      return;
+    }
+    await sleep(1200);
+  }
+  showAnalysisError("Preparing feedback took longer than expected.");
+}
+
+function showAnalysisError(message) {
+  el.analysisError.textContent = message;
+  el.analysisError.classList.remove("hidden");
+  el.retryAnalysis.classList.remove("hidden");
+  announce(el.liveAnnouncer, message);
+}
+
+function showReport(reportUrl) {
+  el.room.classList.add("hidden");
+  el.reportView.classList.remove("hidden");
+  el.reportFrame.src = reportUrl;
+  el.openReport.href = reportUrl;
+  el.downloadReport.href = reportUrl;
+  announce(el.liveAnnouncer, "Your feedback report is ready.");
+}
+
+async function resetForNewInterview() {
+  releaseCapture();
+  stopCameraPreview();
+  stopClock();
+  await app.interviewer.release();
+  app.interviewer = new InterviewerAudioPlayer();
+  app.sessionId = null;
+  app.active = false;
+  app.questionIndex = 1;
+  app.totalQuestions = 5;
+  app.currentLine = "";
+  app.room.dataset.state = "idle";
+  el.room.classList.add("hidden");
+  el.reportView.classList.add("hidden");
+  el.callStage.classList.remove("hidden");
+  el.footer.classList.remove("hidden");
+  el.preparing.classList.add("hidden");
+  el.reportFrame.src = "about:blank";
+  el.join.textContent = "Join the interview room";
+  updateCaption();
+  updateJoinAvailability();
+  await loadRecentSessions();
+  el.setup.classList.remove("hidden");
+  el.name.focus();
+}
+
+function bindEvents() {
+  el.role.addEventListener("change", () => {
+    const other = el.role.value === "Other";
+    el.otherRoleWrap.classList.toggle("hidden", !other);
+    el.otherRole.required = other;
+    if (other) el.otherRole.focus();
+    updateJoinAvailability();
+  });
+  el.otherRole.addEventListener("input", updateJoinAvailability);
+  el.form.addEventListener("submit", (event) => void joinRoom(event));
+  el.grantMic.addEventListener("click", () => void grantMicrophone());
+  el.micSelect.addEventListener("change", () => {
+    app.deviceId = el.micSelect.value;
+    app.deviceLabel = el.micSelect.selectedOptions[0]?.textContent || "";
+    el.bluetoothWarning.classList.toggle("hidden", !isBluetoothOrHeadset(app.deviceLabel));
+    el.micVerdict.textContent = "Ready to test";
+  });
+  el.testMic.addEventListener("click", () => void testMicrophone());
+  el.captions.addEventListener("click", () => {
+    app.captionsOn = !app.captionsOn;
+    el.captions.setAttribute("aria-pressed", String(app.captionsOn));
+    el.captions.textContent = app.captionsOn ? "Captions on" : "Captions off";
+    updateCaption();
+    announce(el.liveAnnouncer, app.captionsOn ? "Captions on." : "Captions off.");
+  });
+  el.repeat.addEventListener("click", () => void repeatQuestion());
+  el.end.addEventListener("click", openEndDialog);
+  el.confirmEnd.addEventListener("click", (event) => void confirmEndInterview(event));
+  el.newInterview.addEventListener("click", () => void resetForNewInterview());
+  el.retryAnalysis.addEventListener("click", () => {
+    el.analysisError.classList.add("hidden");
+    el.retryAnalysis.classList.add("hidden");
+    el.analysisStartedAt = performance.now();
+    void requestAnalysis();
+  });
+  document.addEventListener("keydown", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+    if (event.key.toLowerCase() === "r" && !el.room.classList.contains("hidden")) {
+      event.preventDefault();
+      void repeatQuestion();
+    }
+    if (event.key === "Escape" && !el.room.classList.contains("hidden") && !el.preparing.classList.contains("hidden")) {
+      event.preventDefault();
+    } else if (event.key === "Escape" && !el.room.classList.contains("hidden")) {
+      event.preventDefault();
+      openEndDialog();
+    }
   });
 }
 
-async function startListeningTurn() {
-  el.statusBadge.textContent = "Your turn – listening";
-  el.statusBadge.className = "status-badge status-listening";
-  el.listeningPanel.classList.remove("hidden");
-  el.reviewPanel.classList.add("hidden");
-  el.noSpeechNotice.classList.add("hidden");
-  el.uploadErrorNotice.classList.add("hidden");
-  el.playQuestionBtn.classList.add("hidden");
-  announce(el.liveAnnouncer, "Interviewer finished speaking. Your turn to answer.");
-
-  // Start timer
-  appState.recordingStartTime = Date.now();
-  updateTimerDisplay();
-  clearInterval(appState.timerInterval);
-  appState.timerInterval = setInterval(updateTimerDisplay, 500);
-
-  // Initialize VAD detector
-  const vad = new VadDetector(16000);
-
-  if (appState.captureSession) {
-    appState.captureSession.release();
-  }
-  appState.captureSession = new AudioCaptureSession();
-
-  try {
-    await appState.captureSession.start(
-      appState.selectedDeviceId,
-      (frame) => {
-        // Feed frame to VAD
-        const vadResult = vad.processFrame(frame);
-        if (vadResult.shouldStop) {
-          if (vadResult.stopReason === "timeout") {
-            handleNoSpeechDetected();
-          } else {
-            handleStopAnswering();
-          }
-        }
-      },
-      (rms) => {
-        updateLevelMeter(el.listeningMeterBar, rms);
-      }
-    );
-  } catch (err) {
-    alert("Could not access microphone: " + (err.message || "Microphone capture error"));
-    clearInterval(appState.timerInterval);
-  }
+async function init() {
+  bindEvents();
+  updateJoinAvailability();
+  await Promise.all([pollHealth(), loadRecentSessions()]);
+  window.setInterval(() => {
+    if (!app.modelsReady) void pollHealth();
+  }, 1200);
 }
 
-function updateTimerDisplay() {
-  const elapsed = (Date.now() - appState.recordingStartTime) / 1000;
-  el.timerDisplay.textContent = formatTime(elapsed);
+function animateCallRoom() {
+  app.orbLevel = app.orbLevel * 0.78 + Math.min(1, app.interviewer.getLevel() * 8) * 0.22;
+  el.orb.querySelectorAll("i").forEach((layer, index) => {
+    const scale = 0.62 + app.orbLevel * 0.38 * (1 - index * 0.16);
+    layer.style.transform = `scale(${scale})`;
+  });
+  window.requestAnimationFrame(animateCallRoom);
 }
 
-async function handleStopAnswering() {
-  clearInterval(appState.timerInterval);
-  updateLevelMeter(el.listeningMeterBar, 0);
-
-  if (!appState.captureSession || !appState.captureSession.isRecording) {
-    return;
-  }
-
-  el.statusBadge.textContent = "Processing your answer…";
-  el.statusBadge.className = "status-badge status-processing";
-  announce(el.liveAnnouncer, "Recording stopped. Processing answer.");
-
-  try {
-    const recordResult = await appState.captureSession.stop({ trimSilence: true });
-    appState.lastRecordedWav = recordResult.wavBuffer;
-    appState.lastRecordedBlob = recordResult.wavBlob;
-
-    if (appState.reviewBeforeSending) {
-      // Offer review before uploading
-      el.listeningPanel.classList.add("hidden");
-      el.reviewAudio.src = URL.createObjectURL(recordResult.wavBlob);
-      el.reviewPanel.classList.remove("hidden");
-      announce(el.liveAnnouncer, "Review your answer recording before submitting.");
-    } else {
-      await uploadAnswerBlob(recordResult.wavBlob);
-    }
-  } catch (err) {
-    el.uploadErrorMessage.textContent = err.message || "Failed to process audio recording.";
-    el.uploadErrorNotice.classList.remove("hidden");
-  }
-}
-
-async function handleNoSpeechDetected() {
-  clearInterval(appState.timerInterval);
-  updateLevelMeter(el.listeningMeterBar, 0);
-
-  if (appState.captureSession && appState.captureSession.isRecording) {
-    await appState.captureSession.stop({ trimSilence: false });
-  }
-
-  el.listeningPanel.classList.add("hidden");
-  el.noSpeechNotice.classList.remove("hidden");
-  el.statusBadge.textContent = "I did not hear you";
-  el.statusBadge.className = "status-badge status-warn";
-  announce(el.liveAnnouncer, "I did not hear you. Please check your microphone and try again.");
-}
-
-async function uploadAnswerBlob(wavBlob) {
-  el.listeningPanel.classList.add("hidden");
-  el.reviewPanel.classList.add("hidden");
-  el.uploadErrorNotice.classList.add("hidden");
-  el.statusBadge.textContent = "Processing your answer…";
-  el.statusBadge.className = "status-badge status-processing";
-
-  try {
-    const answerResult = await submitAnswer(appState.activeSessionId, wavBlob);
-    renderTurnFeedback(answerResult);
-
-    if (answerResult.finished || answerResult.interviewer.action === "finish") {
-      transitionToResults();
-      return;
-    }
-
-    const interviewerAction = answerResult.interviewer.action;
-    const nextText = answerResult.interviewer.text;
-    const nextAudioUrl = answerResult.interviewer.audio_url;
-
-    if (interviewerAction === "next_question") {
-      appState.questionIndex++;
-      presentQuestion(nextText, nextAudioUrl, false);
-    } else if (interviewerAction === "follow_up") {
-      presentQuestion(nextText, nextAudioUrl, true);
-    } else if (interviewerAction === "repeat" || interviewerAction === "clarify") {
-      // Repeat or clarify question without advancing question index
-      presentQuestion(nextText, nextAudioUrl, appState.isFollowUp);
-    }
-  } catch (err) {
-    el.uploadErrorMessage.textContent = err.message || "Failed to upload answer to server.";
-    el.uploadErrorNotice.classList.remove("hidden");
-    el.statusBadge.textContent = "Upload failed";
-    el.statusBadge.className = "status-badge status-warn";
-  }
-}
-
-function renderTurnFeedback(result) {
-  el.transcriptCard.classList.remove("hidden");
-  el.transcriptText.textContent = result.transcript || "(No words recognized)";
-
-  el.transcriptFlags.innerHTML = "";
-  const flags = result.flags || {};
-  if (flags.too_quiet) {
-    addFlagNotice("Notice: Your voice was recorded at a low volume.");
-  }
-  if (flags.very_short || flags.too_few_words) {
-    addFlagNotice("Notice: The response was very short.");
-  }
-  if (flags.transcription_error) {
-    addFlagNotice("Notice: Speech transcription encountered an error. Please repeat.");
-  }
-}
-
-function addFlagNotice(text) {
-  const p = document.createElement("p");
-  p.className = "flag-notice";
-  p.textContent = text;
-  el.transcriptFlags.appendChild(p);
-}
-
-async function handleEndInterviewEarly() {
-  clearInterval(appState.timerInterval);
-  if (appState.captureSession) {
-    appState.captureSession.release();
-  }
-  transitionToResults();
-}
-
-// -------------------------------------------------------------
-// RESULTS & REPORT POLLING
-// -------------------------------------------------------------
-async function transitionToResults() {
-  if (appState.captureSession) {
-    appState.captureSession.release();
-  }
-  showScreen("results");
-  announce(el.liveAnnouncer, "Interview complete. Starting analysis.");
-
-  el.resultsStatus.textContent = "Finishing interview and generating feedback report…";
-  el.resultsProgressBar.classList.remove("hidden");
-  el.reportContainer.classList.add("hidden");
-  el.resultsActions.classList.add("hidden");
-  el.resultsErrorNotice.classList.add("hidden");
-
-  try {
-    await finishSession(appState.activeSessionId, appState.includeContentScoring);
-    pollSessionStatus(appState.activeSessionId);
-  } catch (err) {
-    el.resultsErrorMessage.textContent = err.message || "Failed to finalize session.";
-    el.resultsErrorNotice.classList.remove("hidden");
-    el.resultsProgressBar.classList.add("hidden");
-  }
-}
-
-function pollSessionStatus(sessionId) {
-  let attempts = 0;
-  const maxAttempts = 200; // 200 * 1.5s = 300s (5 minutes)
-
-  if (appState.pollTimer) {
-    clearInterval(appState.pollTimer);
-  }
-
-  appState.pollTimer = setInterval(async () => {
-    attempts++;
-    try {
-      const status = await getSessionStatus(sessionId);
-      if (status.state === "ready" && status.report_url) {
-        clearInterval(appState.pollTimer);
-        displayReport(status.report_url);
-      } else if (status.state === "error") {
-        clearInterval(appState.pollTimer);
-        el.resultsErrorMessage.textContent = status.message || "Analysis could not be completed.";
-        el.resultsErrorNotice.classList.remove("hidden");
-        el.resultsProgressBar.classList.add("hidden");
-      } else {
-        el.resultsStatus.textContent = status.message || "Analysis is running…";
-      }
-    } catch (err) {
-      if (attempts >= maxAttempts) {
-        clearInterval(appState.pollTimer);
-        el.resultsErrorMessage.textContent = "Analysis timed out after 5 minutes.";
-        el.resultsErrorNotice.classList.remove("hidden");
-        el.resultsProgressBar.classList.add("hidden");
-      }
-    }
-
-    if (attempts >= maxAttempts) {
-      clearInterval(appState.pollTimer);
-      el.resultsErrorMessage.textContent = "Analysis timed out after 5 minutes.";
-      el.resultsErrorNotice.classList.remove("hidden");
-      el.resultsProgressBar.classList.add("hidden");
-    }
-  }, 1500);
-}
-
-function displayReport(reportUrl) {
-  el.resultsStatus.textContent = "Report ready!";
-  el.resultsProgressBar.classList.add("hidden");
-  el.reportFrame.src = reportUrl;
-  el.reportContainer.classList.remove("hidden");
-  el.resultsActions.classList.remove("hidden");
-  announce(el.liveAnnouncer, "Report generated and loaded.");
-
-  el.openNewTabBtn.onclick = () => {
-    window.open(reportUrl, "_blank", "noopener,noreferrer");
-  };
-}
-
-function resetToSetup() {
-  if (appState.pollTimer) {
-    clearInterval(appState.pollTimer);
-  }
-  if (appState.captureSession) {
-    appState.captureSession.release();
-  }
-  appState.activeSessionId = null;
-  appState.questionIndex = 1;
-  appState.lastRecordedWav = null;
-  appState.lastRecordedBlob = null;
-  el.transcriptCard.classList.add("hidden");
-  el.reportFrame.src = "about:blank";
-  showScreen("setup");
-  loadPastSessionsList();
-}
-
-// Start app on DOMContentLoaded
-window.addEventListener("DOMContentLoaded", initApp);
-
+window.addEventListener("DOMContentLoaded", () => void init());
+window.requestAnimationFrame(animateCallRoom);

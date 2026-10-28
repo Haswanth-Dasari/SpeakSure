@@ -72,6 +72,7 @@ def test_calibration_quiet_speech_and_quiet_detects_end_of_speech():
     assert result.stop_reason == "silence"
     assert result.thinking_time_seconds == pytest.approx(2.0, abs=0.1)
     assert result.answer_duration_seconds == pytest.approx(3.0, abs=0.1)
+    assert result.end_wait_seconds == pytest.approx(0.6)
 
 
 def test_pause_inside_speech_does_not_end_answer():

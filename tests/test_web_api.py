@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import io
+import threading
 import time
 import wave
 from collections import deque
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -134,10 +136,13 @@ class FakeTTS:
     def __init__(self) -> None:
         """Initialize a call counter."""
         self.calls = 0
+        self.fail = False
 
     def synthesize(self, _text: str) -> SynthesizedAudio:
         """Return deterministic mono samples for WAV output."""
         self.calls += 1
+        if self.fail:
+            raise RuntimeError("fake synthesis failure")
         return SynthesizedAudio(
             samples=np.zeros(1600, dtype=np.float32),
             sample_rate=16000,
@@ -168,6 +173,7 @@ def _client(
     actions: list[tuple[str, str]] | None = None,
     analysis: object | None = None,
     llm_configured: bool = False,
+    warmup_functions: dict[str, Callable[[], object]] | None = None,
 ) -> tuple[TestClient, FakeSTT, FakeTTS, dict[str, object]]:
     """Build a FastAPI test client with isolated files and injectable fakes."""
     settings = WebSettings(
@@ -218,6 +224,7 @@ def _client(
         cache_dir=settings.cache_dir,
         llm_configured=llm_configured,
         analysis_llm_factory=lambda: created.setdefault("analysis_llm", object()),
+        warmup_functions=warmup_functions,
     )
     return TestClient(create_app(settings, services)), stt, tts, created
 
@@ -257,13 +264,20 @@ def test_health_and_create_session_validate_and_store_browser_metadata(tmp_path)
     assert health.status_code == 200
     assert health.json() == {
         "status": "ok",
+        "components": [
+            {"name": "stt", "status": "ready"},
+            {"name": "tts", "status": "ready"},
+            {"name": "spacy", "status": "ready"},
+        ],
         "stt_model": "base",
         "stt_device_setting": "cpu",
         "tts_voice": "fake-voice",
         "llm_configured": False,
     }
     stt.actual_device = "not-initialized"
-    assert client.get("/api/health").json()["status"] == "loading"
+    loading = client.get("/api/health").json()
+    assert loading["status"] == "loading"
+    assert loading["components"][0] == {"name": "stt", "status": "loading"}
     stt.actual_device = "cpu"
     invalid = client.post(
         "/api/sessions",
@@ -287,7 +301,191 @@ def test_health_and_create_session_validate_and_store_browser_metadata(tmp_path)
     assert entry.session.metadata["capture_source"] == "browser"
     assert entry.session.metadata["input_device"] == "Browser mic"
     assert entry.session.metadata["capture_constraints"] == {"a": 1}
+    assert entry.session.metadata["role"] == "software engineering fresher"
+    assert entry.session.metadata["length"] == "standard"
     assert created["interviewer"] is not None
+
+
+def test_model_warmups_run_in_background_and_health_lists_each_component(tmp_path: Path) -> None:
+    """Keep health in loading state until all three fake model loaders finish."""
+    calls: list[str] = []
+    gate = threading.Event()
+
+    def fake_warmup(name: str) -> Callable[[], None]:
+        """Build a deterministic model warmup that waits for the test gate."""
+        def warmup() -> None:
+            """Record that this component started loading before the gate opens."""
+            calls.append(name)
+            gate.wait(timeout=2)
+        return warmup
+
+    client, _stt, _tts, _created = _client(
+        tmp_path,
+        warmup_functions={
+            name: fake_warmup(name) for name in ("stt", "tts", "spacy")
+        },
+    )
+    with client:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and len(calls) < 1:
+            time.sleep(0.01)
+        health = client.get("/api/health").json()
+        assert health["status"] == "loading"
+        assert health["components"] == [
+            {"name": "stt", "status": "loading"},
+            {"name": "tts", "status": "loading"},
+            {"name": "spacy", "status": "loading"},
+        ]
+        gate.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            health = client.get("/api/health").json()
+            if health["status"] == "ok":
+                break
+            time.sleep(0.01)
+    assert calls == ["stt", "tts", "spacy"]
+    assert health["status"] == "ok"
+
+
+def test_role_length_mapping_and_explicit_questions_precedence(tmp_path: Path) -> None:
+    """Apply preset question counts while preserving explicit counts and role."""
+    client, _stt, _tts, created = _client(tmp_path)
+    expected_counts = {"quick": 3, "standard": 5, "full": 8}
+    for length, expected_count in expected_counts.items():
+        response = client.post(
+            "/api/sessions",
+            json={
+                "length": length,
+                "role": "Data scientist",
+                "candidate_name": "Student",
+                "client": {"input_device_label": "Mic"},
+            },
+        )
+        assert response.status_code == 200
+        entry = client.app.state.registry.get(response.json()["session_id"])
+        assert entry.total_main_questions == expected_count
+        assert entry.session.metadata["role"] == "Data scientist"
+        assert entry.session.metadata["length"] == length
+        assert created["interviewer"].plan.role == "Data scientist"
+
+    explicit = client.post(
+        "/api/sessions",
+        json={
+            "questions": 4,
+            "length": "quick",
+            "role": "Product designer",
+            "client": {"input_device_label": "Mic"},
+        },
+    )
+    assert explicit.status_code == 200
+    entry = client.app.state.registry.get(explicit.json()["session_id"])
+    assert entry.total_main_questions == 4
+    assert entry.session.planned_questions == 4
+    assert entry.session.metadata["length"] == "quick"
+    assert entry.interviewer.plan.role == "Product designer"
+
+    defaulted = client.post(
+        "/api/sessions",
+        json={"client": {"input_device_label": "Mic"}},
+    )
+    assert defaulted.status_code == 200
+    default_entry = client.app.state.registry.get(defaulted.json()["session_id"])
+    assert default_entry.total_main_questions == 5
+    assert default_entry.session.metadata["role"] == "software engineering fresher"
+
+    client.post(f"/api/sessions/{explicit.json()['session_id']}/finish", json={})
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if client.get(f"/api/sessions/{explicit.json()['session_id']}/status").json()["state"] == "ready":
+            break
+        time.sleep(0.01)
+    assert created["analysis_kwargs"]["role"] == "Product designer"
+
+    for invalid_role in ("", " " * 4, "R" * 61):
+        invalid = client.post(
+            "/api/sessions",
+            json={
+                "role": invalid_role,
+                "client": {"input_device_label": "Mic"},
+            },
+        )
+        assert invalid.status_code == 422
+
+
+def test_silent_upload_uses_shared_interviewer_silence_handling(tmp_path: Path) -> None:
+    """Submit silent audio as a normal answer without invoking speech recognition."""
+    client, stt, _tts, created = _client(
+        tmp_path,
+        actions=[("repeat", "Could you say that again?")],
+    )
+    session_id = _create_session(client)["session_id"]
+    response = client.post(
+        f"/api/sessions/{session_id}/answer",
+        content=_wav_bytes(samples=np.zeros(16000, dtype=np.float32)),
+        headers={"content-type": "audio/wav"},
+    )
+    assert response.status_code == 200
+    assert response.json()["interviewer"]["action"] == "repeat"
+    assert stt.calls == 0
+    assert created["interviewer"].answers == [""]
+
+
+def test_answer_timing_metadata_is_updated_from_browser_headers(tmp_path: Path) -> None:
+    """Store server timings and browser-measured upload and answer-start values."""
+    client, _stt, _tts, _created = _client(tmp_path)
+    session_id = _create_session(client)["session_id"]
+    result = _answer(client, session_id)
+    entry = client.app.state.registry.get(session_id)
+    timing = entry.session.turns[0].analysis["timing"]
+    assert {"end_wait_s", "upload_s", "stt_s", "llm_s", "tts_s"} <= set(timing)
+    assert timing["upload_s"] is None
+    assert timing["tts_s"] == 0.001
+
+    updated = client.patch(
+        f"/api/sessions/{session_id}/turns/{result['turn_index']}/timing",
+        headers={
+            "X-Client-Upload-Ms": "123.5",
+            "X-Client-End-Wait-Ms": "840",
+        },
+    )
+    assert updated.status_code == 200
+    stored = entry.session.turns[0].analysis["timing"]
+    assert stored["upload_s"] == 0.1235
+    assert stored["end_wait_s"] == 0.84
+
+
+def test_analysis_status_exposes_callback_stage_and_omits_unknown_stage(tmp_path: Path) -> None:
+    """Expose known progress values but omit stage fields when none are reported."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def analysis(session: Any, **kwargs: Any) -> Any:
+        """Report a deterministic stage and wait so the status route can observe it."""
+        callback = kwargs["progress_callback"]
+        callback("delivery", 0.4)
+        entered.set()
+        release.wait(timeout=2)
+        return session
+
+    client, _stt, _tts, _created = _client(tmp_path, analysis=analysis)
+    session_id = _create_session(client)["session_id"]
+    active = client.get(f"/api/sessions/{session_id}/status").json()
+    assert "stage" not in active
+    assert "progress" not in active
+    assert client.post(f"/api/sessions/{session_id}/finish", json={}).status_code == 200
+    assert entered.wait(timeout=2)
+    status = client.get(f"/api/sessions/{session_id}/status").json()
+    assert status["stage"] == "delivery"
+    assert status["progress"] == 0.4
+    release.set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        status = client.get(f"/api/sessions/{session_id}/status").json()
+        if status["state"] == "ready":
+            break
+        time.sleep(0.01)
+    assert status["stage"] == "report"
+    assert status["progress"] == 1.0
 
 
 def test_audio_serves_cached_tts_and_rejects_unknown_or_traversal_names(tmp_path):
@@ -296,6 +494,7 @@ def test_audio_serves_cached_tts_and_rejects_unknown_or_traversal_names(tmp_path
     session_id = session["session_id"]
     audio_url = session["first_question"]["audio_url"]
 
+    assert tts.calls == 1
     first = client.get(audio_url)
     second = client.get(audio_url)
 
@@ -310,11 +509,16 @@ def test_audio_serves_cached_tts_and_rejects_unknown_or_traversal_names(tmp_path
 
 
 def test_answer_flow_supports_followup_repeat_next_question_and_finish(tmp_path):
-    client, stt, _tts, created = _client(tmp_path)
+    client, stt, tts, created = _client(tmp_path)
     session = _create_session(client)
     session_id = session["session_id"]
 
     follow_up = _answer(client, session_id)
+    synthesized_calls = tts.calls
+    ready_audio = client.get(follow_up["interviewer"]["audio_url"])
+    assert ready_audio.status_code == 200
+    assert ready_audio.content[:4] == b"RIFF"
+    assert tts.calls == synthesized_calls
     repeated = _answer(client, session_id)
     next_question = _answer(client, session_id)
     finished = _answer(client, session_id)
@@ -336,11 +540,30 @@ def test_answer_flow_supports_followup_repeat_next_question_and_finish(tmp_path)
         "A useful candidate answer.",
     ]
     assert stt.calls == 4
+    assert tts.calls == 5
     assert client.post(
         f"/api/sessions/{session_id}/answer",
         content=_wav_bytes(),
         headers={"content-type": "audio/wav"},
     ).status_code == 409
+
+
+def test_answer_reports_reply_audio_synthesis_failure(tmp_path):
+    client, _stt, tts, _created = _client(tmp_path)
+    session_id = _create_session(client)["session_id"]
+    tts.fail = True
+
+    response = client.post(
+        f"/api/sessions/{session_id}/answer",
+        content=_wav_bytes(),
+        headers={"content-type": "audio/wav"},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": "reply_audio_failed",
+        "message": "The interviewer response audio could not be generated.",
+    }
 
 
 def test_audio_upload_rejects_invalid_content_type_wav_format_size_and_session(
@@ -535,6 +758,10 @@ def test_static_files_served_with_correct_mime_and_no_cache(tmp_path):
     assert js.headers["content-type"].startswith("text/javascript")
     assert js.headers.get("cache-control") == "no-cache"
 
+    audio_js = client.get("/static/js/interviewer-audio.js")
+    assert audio_js.status_code == 200
+    assert audio_js.headers["content-type"].startswith("text/javascript")
+
     # 4. GET /static/selftest.html serves text/html with no-cache
     selftest = client.get("/static/selftest.html")
     assert selftest.status_code == 200
@@ -544,6 +771,26 @@ def test_static_files_served_with_correct_mime_and_no_cache(tmp_path):
     # 5. Traversal and nonexistent files return 404
     assert client.get("/static/../app.py").status_code == 404
     assert client.get("/static/nonexistent.xyz").status_code == 404
+
+
+def test_static_interface_has_no_review_or_learner_transcript_flow() -> None:
+    """Keep the interview room voice-first and make captions interviewer-only."""
+    static_dir = Path(__file__).resolve().parents[1] / "src" / "speaksure" / "web" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    main = (static_dir / "js" / "main.js").read_text(encoding="utf-8")
+    forbidden = (
+        "review-panel",
+        "review-before-sending",
+        "send-answer-btn",
+        "transcript-card",
+        "transcript-text",
+    )
+    assert all(term not in index and term not in main for term in forbidden)
+    assert 'id="captions-toggle"' in index
+    assert 'aria-pressed="false"' in index
+    assert 'sandbox="allow-same-origin"' in index
+    assert "app.currentLine" in main
+    assert "result.transcript" not in main
 
 
 def test_no_static_file_contains_external_urls():

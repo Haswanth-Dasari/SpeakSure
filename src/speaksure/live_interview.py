@@ -227,6 +227,10 @@ def process_interview_turn(
     audio_delivery = analyze_audio_delivery(audio_path, int(fluency["word_count"]))
     analysis: dict[str, object] = {
         "timing": {
+            "end_wait_s": captured.end_wait_seconds,
+            "stt_s": stt_seconds,
+            "llm_s": llm_seconds,
+            "tts_s": None,
             "capture_stop_reason": captured.stop_reason,
             "thinking_time_seconds": captured.thinking_time_seconds,
             "answer_duration_seconds": captured.answer_duration_seconds,
@@ -282,6 +286,7 @@ def process_interview_turn(
             turn.analysis["timing"]["tts_synthesis_seconds"] = (
         spoken_timing.synthesis_seconds
             )
+            turn.analysis["timing"]["tts_s"] = spoken_timing.synthesis_seconds
     tts_seconds = (
         spoken_timing.synthesis_seconds if spoken_timing is not None else 0.0
     )

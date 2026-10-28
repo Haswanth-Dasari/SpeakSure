@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import unicodedata
+import random
 from pathlib import Path
 from statistics import mean, median
 from typing import Iterable, Mapping, Sequence
@@ -29,9 +30,69 @@ def normalize_text(text: str) -> str:
     return " ".join("".join(characters).split())
 
 
-def _word_error_counts(reference: str, hypothesis: str) -> dict[str, int | float]:
+# Extended-only equivalence table: common US/UK spellings and time notation.
+SPELLING_PAIRS = (
+    ("center", "centre"), ("color", "colour"), ("organize", "organise"),
+    ("organization", "organisation"), ("recognize", "recognise"),
+    ("analyze", "analyse"), ("behavior", "behaviour"),
+    ("favor", "favour"), ("favorite", "favourite"), ("neighbor", "neighbour"),
+    ("theater", "theatre"), ("meter", "metre"), ("gray", "grey"),
+    ("license", "licence"), ("defense", "defence"), ("traveling", "travelling"),
+    ("program", "programme"),
+)
+_SPELLING_CANON = {variant: pair[0] for pair in SPELLING_PAIRS for variant in pair}
+
+
+def normalize_extended(text: str) -> str:
+    """Apply basic cleanup plus documented spelling, clock, and ordinal equivalences."""
+    import re
+    tokens = normalize_text(text).split()
+    normalized = []
+    for token in tokens:
+        if token in {"a.m", "am", "a", "m"}:
+            # Handle punctuation-spaced forms after basic cleanup using source-level regex below.
+            normalized.append(token)
+        else:
+            normalized.append(_SPELLING_CANON.get(token, re.sub(r"(?<=\d)(?:st|nd|rd|th)$", "", token)))
+    cleaned = " ".join(normalized)
+    cleaned = re.sub(r"\b(?:a\s*\.\s*m\.?|a\s+m)\b", "am", cleaned)
+    cleaned = re.sub(r"\b(?:p\s*\.\s*m\.?|p\s+m)\b", "pm", cleaned)
+    return cleaned
+
+
+def _accepted_reference(reference: str, accept: str, extended: bool) -> str:
+    """Normalize each reference token using optional pipe-delimited alternatives."""
+    words = normalize_extended(reference) .split() if extended else normalize_text(reference).split()
+    if accept:
+        alternatives = [normalize_extended(item) if extended else normalize_text(item) for item in accept.split("|")]
+        if len(words) == 1 and alternatives:
+            # Single-token aliases are the common manifest use; multiword aliases
+            # are handled by canonicalizing the whole reference/hypothesis phrase.
+            return alternatives[0]
+    return " ".join(words)
+
+
+def bootstrap_wer(pairs: Sequence[tuple[str, str]], *, resamples: int = 2000, seed: int = 1234,
+                  extended: bool = False) -> tuple[float, float]:
+    """Clip bootstrap CI. Tiny check: one perfect and one wholly-wrong 1-word clip yields only 0/0.5/1 samples."""
+    if not pairs:
+        return (0.0, 0.0)
+    rng = random.Random(seed)
+    cached = [_word_error_counts(ref, hyp, extended=extended) for ref, hyp in pairs]
+    values = []
+    for _ in range(resamples):
+        sample = [cached[rng.randrange(len(cached))] for _ in cached]
+        errors = sum(int(item["errors"]) for item in sample)
+        words = sum(int(item["reference_words"]) for item in sample)
+        values.append(errors / words if words else 0.0)
+    values.sort()
+    return values[int(0.025 * (resamples - 1))], values[int(0.975 * (resamples - 1))]
+
+
+def _word_error_counts(reference: str, hypothesis: str, *, extended: bool = False, accept: str = "") -> dict[str, int | float]:
     """Return JiWER's word-level edit counts for one normalized clip pair."""
-    result = jiwer.process_words(normalize_text(reference), normalize_text(hypothesis))
+    norm = normalize_extended if extended else normalize_text
+    result = jiwer.process_words(_accepted_reference(reference, accept, extended), norm(hypothesis))
     return {
         "substitutions": result.substitutions,
         "deletions": result.deletions,
@@ -71,11 +132,11 @@ def word_level_errors(reference: str, hypothesis: str) -> str:
     return " ".join(errors) if errors else "none"
 
 
-def pooled_wer(pairs: Iterable[tuple[str, str]]) -> dict[str, int | float]:
+def pooled_wer(pairs: Iterable[tuple[str, str]], *, extended: bool = False) -> dict[str, int | float]:
     """Return pooled word errors and WER, weighted by total reference words."""
     substitutions = deletions = insertions = reference_words = 0
     for reference, hypothesis in pairs:
-        counts = _word_error_counts(reference, hypothesis)
+        counts = _word_error_counts(reference, hypothesis, extended=extended)
         substitutions += int(counts["substitutions"])
         deletions += int(counts["deletions"])
         insertions += int(counts["insertions"])
@@ -143,6 +204,7 @@ def load_manifest(path: str | Path) -> list[dict[str, object]]:
                     "input_device_id": (source_row.get("input_device_id") or "").strip(),
                     "category": (source_row.get("category") or "").strip(),
                     "notes": (source_row.get("notes") or "").strip(),
+                    "accept": (source_row.get("accept") or "").strip(),
                 }
             )
     return rows
@@ -214,8 +276,11 @@ def summarize(
             }
         )
         pooled = pooled_wer(pairs)
+        extended = pooled_wer(pairs, extended=True)
         summaries[group] = {
             "pooled_wer": pooled["wer"],
+            "extended_wer": extended["wer"],
+            "clips": len(rows),
             "reference_words": pooled["reference_words"],
             "mean_clip_wer": mean(clip_wers) if clip_wers else 0.0,
             "median_clip_wer": median(clip_wers) if clip_wers else 0.0,

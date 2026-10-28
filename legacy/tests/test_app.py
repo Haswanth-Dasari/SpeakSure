@@ -4,10 +4,10 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from src.speaksure import ai_provider
+from legacy import ai_provider
 from src.speaksure import speech_to_text
-from src.speaksure.ai_provider import ProviderError
-from src.speaksure.core import (
+from legacy.ai_provider import ProviderError
+from legacy.core import (
     INTRODUCTORY_QUESTIONS,
     PRACTICE_MODES,
     create_session,

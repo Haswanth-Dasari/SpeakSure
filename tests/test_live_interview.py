@@ -48,6 +48,7 @@ def captured(
     samples: np.ndarray | None = None,
     thinking: float = 1.0,
     answer_duration: float = 2.0,
+    end_wait_seconds: float | None = 0.5,
 ) -> CapturedAnswer:
     """Build a captured-answer object for runner tests."""
     return CapturedAnswer(
@@ -62,6 +63,7 @@ def captured(
         stop_reason=stop_reason,
         noise_rms=0.002,
         threshold=0.008,
+        end_wait_seconds=end_wait_seconds,
     )
 
 
@@ -237,6 +239,10 @@ def test_three_question_run_speaks_in_order_saves_each_turn_and_stops_at_closing
         turn.analysis["timing"]["tts_synthesis_seconds"] == 0.2
         for turn in session.turns
     )
+    assert session.turns[0].analysis["timing"]["end_wait_s"] == pytest.approx(0.5)
+    assert session.turns[0].analysis["timing"]["stt_s"] == pytest.approx(0.1)
+    assert session.turns[0].analysis["timing"]["llm_s"] == pytest.approx(0.1)
+    assert session.turns[0].analysis["timing"]["tts_s"] == pytest.approx(0.2)
     assert session.turns[0].analysis["timing"]["stt_seconds"] == pytest.approx(0.1)
     assert session.turns[0].analysis["timing"]["llm_seconds"] == pytest.approx(0.1)
     assert session.turns[0].analysis["timing"][

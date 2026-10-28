@@ -6,6 +6,7 @@ import argparse
 import csv
 import gc
 import io
+import random
 import sys
 import time
 import wave
@@ -62,6 +63,7 @@ CSV_FIELDS = (
     "input_device_id",
     "category",
     "notes",
+    "accept",
     "word_level_errors",
 )
 DEFAULT_MANIFEST = PROJECT_ROOT / "data" / "eval" / "manifest.csv"
@@ -202,6 +204,7 @@ def run_benchmark(
                         ),
                         "category": str(manifest_row.get("category", "")),
                         "notes": str(manifest_row.get("notes", "")),
+                        "accept": str(manifest_row.get("accept", "")),
                         "reference": reference,
                         "hypothesis": transcription.text,
                         "word_level_errors": word_level_errors(
@@ -276,6 +279,7 @@ def summary_table(
         "Group",
         "Reference words",
         "Pooled WER",
+        "Extended WER",
         "Mean clip WER",
         "Median clip WER",
         "Name hit rate",
@@ -293,6 +297,7 @@ def summary_table(
             model,
             str(data["reference_words"]),
             _format_metric(data["pooled_wer"]),
+            _format_metric(data["extended_wer"]),
             _format_metric(data["mean_clip_wer"]),
             _format_metric(data["median_clip_wer"]),
             _format_metric(data["name_hit_rate"]),
@@ -324,6 +329,7 @@ def write_outputs(
     output_path: Path,
     results: Sequence[Mapping[str, object]],
     group_by: Sequence[str] = ("model",),
+    *, excluded: Sequence[str] = (), normalize: str = "basic", seed: int = 1234,
 ) -> Path:
     """Write benchmark CSV and its adjacent Markdown summary without overwriting."""
     csv_path = output_path.expanduser()
@@ -342,10 +348,87 @@ def write_outputs(
     with markdown_path.open("x", encoding="utf-8", newline="") as output_file:
         output_file.write("# ASR benchmark summary\n\n")
         output_file.write(summary_table(results, group_by))
+        output_file.write(f"\n\nExcluded clips: {', '.join(excluded) if excluded else 'none'}\n")
         output_file.write("\n\n## Per-clip transcripts and word errors\n\n")
         output_file.write(per_clip_report(results))
         output_file.write("\n")
+    if normalize in {"basic", "extended"}:
+        report_dir = PROJECT_ROOT / "docs" / "results"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / "e1_asr.md"
+        if not report_path.exists():
+            report_path.write_text(e1_report(results, excluded, seed), encoding="utf-8")
     return markdown_path
+
+
+def _ci(rows: Sequence[Mapping[str, object]], *, extended: bool, seed: int) -> tuple[float, float]:
+    from speaksure.evaluation.asr import bootstrap_wer
+    pairs = [(str(row.get("reference", "")), str(row.get("hypothesis", ""))) for row in rows]
+    return bootstrap_wer(pairs, resamples=2000, seed=seed, extended=extended)
+
+
+def _fmt_ci(rows: Sequence[Mapping[str, object]], extended: bool, seed: int) -> str:
+    from speaksure.evaluation.asr import pooled_wer
+    pairs = [(str(row.get("reference", "")), str(row.get("hypothesis", ""))) for row in rows]
+    value = float(pooled_wer(pairs, extended=extended)["wer"])
+    low, high = _ci(rows, extended=extended, seed=seed)
+    return f"{value:.3f} [{low:.3f}, {high:.3f}]"
+
+
+def e1_report(results: Sequence[Mapping[str, object]], excluded: Sequence[str], seed: int) -> str:
+    """Build the requested E1 result tables from benchmark CSV rows."""
+    from speaksure.evaluation.asr import normalize_text, normalize_extended, pooled_wer
+    groups: dict[str, list[Mapping[str, object]]] = {}
+    for row in results:
+        if str(row.get("device_mismatch", "")).lower() in {"true", "1"}:
+            continue
+        groups.setdefault(str(row.get("model", "")), []).append(row)
+    lines = ["# E1 ASR benchmark results", "", f"Bootstrap: 2,000 clip resamples; seed={seed}. Excluded clips: {', '.join(excluded) if excluded else 'none'}.", "", "## Model comparison", "", "| Model | Clips | Ref words | Raw WER (95% CI) | Extended WER (95% CI) | RTF | Mean word probability | Load + first run (s) |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for model, rows in groups.items():
+        words = sum(len(normalize_text(str(r.get("reference", ""))).split()) for r in rows)
+        rtf = [float(r["real_time_factor"]) for r in rows if r.get("real_time_factor") not in (None, "") and str(r.get("warmup", "")).lower() not in {"true", "1"}]
+        probs = [float(r["mean_word_probability"]) for r in rows if r.get("mean_word_probability") not in (None, "")]
+        loads = [float(r["load_plus_first_run_seconds"]) for r in rows if r.get("load_plus_first_run_seconds") not in (None, "")]
+        lines.append(f"| {model} | {len(rows)} | {words} | {_fmt_ci(rows, False, seed)} | {_fmt_ci(rows, True, seed)} | {sum(rtf)/len(rtf):.3f} | {sum(probs)/len(probs):.3f} | {sum(loads)/len(loads):.3f} |" if rtf and probs and loads else f"| {model} | {len(rows)} | {words} | {_fmt_ci(rows, False, seed)} | {_fmt_ci(rows, True, seed)} | - | - | - |")
+    for label, field in (("Per-category", "category"), ("Per-device", "input_device")):
+        lines += ["", f"## {label}", "", "| Group | Model | Clips | Ref words | Raw WER | Extended WER |", "|---|---|---:|---:|---:|---:|"]
+        buckets: dict[tuple[str, str], list[Mapping[str, object]]] = {}
+        for model, rows in groups.items():
+            for row in rows: buckets.setdefault((str(row.get(field, "") or "unspecified"), model), []).append(row)
+        for (group, model), rows in buckets.items():
+            words = sum(len(normalize_text(str(r.get("reference", ""))).split()) for r in rows)
+            lines.append(f"| {group} | {model} | {len(rows)} | {words} | {_fmt_ci(rows, False, seed)} | {_fmt_ci(rows, True, seed)} |")
+    lines += ["", "## Paired comparisons", "", "| First model vs second | Mean WER difference (first − second) | 95% interval | Fraction first better |", "|---|---:|---:|---:|"]
+    by_model_clip = {(str(r.get("model")), Path(str(r.get("clip", ""))).name): r for r in results}
+    for first, second in (("medium", "large-v3"), ("small", "medium")):
+        clips = sorted({clip for model, clip in by_model_clip if model == first} & {clip for model, clip in by_model_clip if model == second})
+        diffs = []
+        if clips:
+            rng = random.Random(seed)
+            for _ in range(2000):
+                sample = [rng.choice(clips) for _ in clips]
+                diffs.append(sum(float(by_model_clip[(first,c)].get("wer", 0))-float(by_model_clip[(second,c)].get("wer", 0)) for c in sample)/len(sample))
+            ordered = sorted(diffs)
+            mean_diff = sum(diffs)/len(diffs)
+            lines.append(f"| {first} vs {second} | {mean_diff:.3f} | [{ordered[49]:.3f}, {ordered[1949]:.3f}] | {sum(d < 0 for d in diffs)/len(diffs):.3f} |")
+    lines += ["", "## First-word analysis", "", "| Model | First word wrong/missing | Other ref words wrong (substitution/deletion) |", "|---|---:|---:|"]
+    for model, rows in groups.items():
+        first_bad = other_bad = first_n = other_n = 0
+        for row in rows:
+            ref = normalize_text(str(row.get("reference", ""))).split()
+            hyp = normalize_text(str(row.get("hypothesis", ""))).split()
+            if not ref: continue
+            first_n += 1
+            first_bad += int(not hyp or ref[0] != hyp[0])
+            # Token-position comparison is intentionally a transparent approximation to aligned S/D counts.
+            other_n += max(0, len(ref)-1)
+            other_bad += sum(1 for i, word in enumerate(ref[1:], 1) if i >= len(hyp) or hyp[i] != word)
+        lines.append(f"| {model} | {first_bad}/{first_n} ({first_bad/first_n:.3f}) | {other_bad}/{other_n} ({other_bad/other_n:.3f}) |" if first_n and other_n else f"| {model} | {first_bad}/{first_n} | {other_bad}/{other_n} |")
+    hotword_sets = {str(r.get("hotwords", "")) for r in results}
+    if len(hotword_sets) > 1:
+        lines += ["", "## Hotword comparison", "", "Hotword values present: " + ", ".join(sorted(hotword_sets))]
+    lines += ["", "## Reading guide", "", "Raw WER counts every token mismatch after lowercase and punctuation cleanup.", "Extended WER also equates listed US/UK spellings, clock forms, and digit ordinals.", "Intervals resample whole clips, so each clip contributes its complete reference and hypothesis.", "A negative paired difference means the first listed model has lower WER.", "First-word rates flag a first-position mismatch; other-word rates count remaining reference positions."]
+    return "\n".join(lines) + "\n"
 
 
 def _default_output_path() -> Path:
@@ -363,6 +446,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--language", default="en")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--hotwords", default="")
+    parser.add_argument("--normalize", choices=("basic", "extended"), default="basic")
+    parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--exclude-clips", default="", help="Comma-separated clip names or paths to omit.")
+    parser.add_argument("--report-only", type=Path, help="Report from an existing benchmark CSV.")
     parser.add_argument(
         "--group-by",
         default="model",
@@ -375,22 +462,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         print(f"Could not load ASR manifest: {error}", file=sys.stderr)
         return 1
+    excluded = [item.strip() for item in args.exclude_clips.split(",") if item.strip()]
+    excluded_names = {Path(item).name for item in excluded}
+    manifest_rows = [row for row in manifest_rows if Path(str(row["clip"])).name not in excluded_names and str(row["clip"]) not in excluded]
     models = [model.strip() for model in args.models.split(",") if model.strip()]
     if not models:
         parser.error("--models must contain at least one model size.")
     group_by = [field.strip() for field in args.group_by.split(",") if field.strip()]
     if not group_by or any(field not in GROUP_FIELDS for field in group_by):
         parser.error("--group-by must contain model, input_device, and/or category.")
-    results, failures = run_benchmark(
+    if args.report_only:
+        with args.report_only.open("r", encoding="utf-8-sig", newline="") as source:
+            results = list(csv.DictReader(source))
+        failures = []
+        if excluded:
+            results = [row for row in results if Path(str(row.get("clip", ""))).name not in excluded_names and str(row.get("clip", "")) not in excluded]
+    else:
+        results, failures = run_benchmark(
         manifest_rows,
         models,
         device=args.device,
         language=args.language,
         hotwords=args.hotwords,
-    )
+        )
     output_path = args.out or _default_output_path()
     try:
-        markdown_path = write_outputs(output_path, results, group_by)
+        markdown_path = write_outputs(output_path, results, group_by, excluded=excluded, normalize=args.normalize, seed=args.seed)
     except OSError as error:
         print(f"Could not write ASR benchmark output: {error}", file=sys.stderr)
         return 1

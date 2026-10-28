@@ -76,7 +76,7 @@
 <body>
   <main>
     <h1>Pure Function Self-Tests</h1>
-    <p>Automated verification for browser WAV encoding, anti-aliased resampling, and VAD segmentation.</p>
+    <p>Automated verification for browser WAV encoding, anti-aliased resampling, VAD segmentation, and the silent-answer window.</p>
     <div id="results" class="test-list" aria-live="polite">Running tests…</div>
   </main>
 
@@ -228,7 +228,31 @@
     } catch (err) {
       renderResult("VAD (silence-speech-silence segmentation and 2.5s silence timeout)", false, String(err));
     }
+
+    // Test 4: The call room uploads a silent answer after 20 seconds.
+    try {
+      const sampleRate = 16000;
+      const frameSec = 0.1;
+      const silence = new Float32Array(Math.round(sampleRate * frameSec));
+      const vad = new VadDetector(sampleRate, { noSpeechTimeout: 20 });
+      let elapsed = 0;
+      let reason = null;
+      for (let frame = 0; frame < 250; frame++) {
+        const result = vad.processFrame(silence);
+        elapsed += frameSec;
+        if (result.shouldStop) {
+          reason = result.stopReason;
+          break;
+        }
+      }
+      if (reason !== "timeout") throw new Error(`Expected timeout, got ${reason}`);
+      if (Math.abs(elapsed - 20) > frameSec) {
+        throw new Error(`Silent answer stopped after ${elapsed.toFixed(1)} seconds`);
+      }
+      renderResult("VAD (silent-answer upload window)", true, "No speech stops at 20 seconds so the silent recording can be submitted.");
+    } catch (err) {
+      renderResult("VAD (silent-answer upload window)", false, String(err));
+    }
   </script>
 </body>
 </html>
-

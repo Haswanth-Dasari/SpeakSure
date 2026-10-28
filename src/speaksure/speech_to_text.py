@@ -412,6 +412,12 @@ class LocalSpeechToTextProvider:
         self._model_loader = model_loader or _load_local_model
         self.actual_device = "not-initialized"
 
+    def warmup(self) -> None:
+        """Load the selected local model without running an audio transcription."""
+        _model, self.actual_device, _compute_type = self._model_loader(
+            self.config.model_size, self.config.device
+        )
+
     def transcribe(self, audio: bytes, *, filename: str, content_type: str) -> str:
         """Transcribe audio and return only its recognized text."""
         return self.transcribe_detailed(

@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>SpeakSure interview room: design target</title>
+    <style>
+      :root {
+        --bg: #f3f5fb;
+        --bg2: #e3e9f8;
+        --panel: #fff;
+        --ink: #13203d;
+        --mute: #58647f;
+        --line: #d7deee;
+        --acc: #2f63f0;
+        --accink: #fff;
+        --teal: #0f9d8f;
+        --red: #c9402f;
+        --o1: #6f93ff;
+        --o2: #3fd0c0;
+        --sh: 0 12px 40px rgba(19, 32, 61, 0.12);
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0f1f;
+          --bg2: #131a35;
+          --panel: #151c38;
+          --ink: #ecf1ff;
+          --mute: #9aa8c9;
+          --line: #262f52;
+          --acc: #7a9bff;
+          --accink: #0a0f1f;
+          --teal: #3ad6c6;
+          --red: #ff7a66;
+          --sh: 0 12px 40px rgba(0, 0, 0, 0.5);
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        font:
+          16px/1.5 system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        color: var(--ink);
+        background: radial-gradient(
+          1200px 700px at 50% -10%,
+          var(--bg2),
+          var(--bg)
+        );
+        padding-top: 52px;
+      }
+      button,
+      select,
+      input {
+        font: inherit;
+        color: inherit;
+      }
+      .btn {
+        border: 0;
+        border-radius: 12px;
+        padding: 0.8rem 1.3rem;
+        background: var(--acc);
+        color: var(--accink);
+        font-weight: 650;
+        cursor: pointer;
+      }
+      .btn.ghost {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--ink);
+      }
+      .btn.end {
+        background: transparent;
+        border: 1px solid var(--red);
+        color: var(--red);
+      }
+      :focus-visible {
+        outline: 3px solid var(--acc);
+        outline-offset: 2px;
+      }
+      .hide {
+        display: none !important;
+      }
+      .review {
+        position: fixed;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 9;
+        display: flex;
+        gap: 4px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px;
+        box-shadow: var(--sh);
+        font-size: 13px;
+      }
+      .review button {
+        border: 0;
+        background: transparent;
+        border-radius: 999px;
+        padding: 6px 12px;
+        cursor: pointer;
+        color: var(--mute);
+      }
+      .review button.on {
+        background: var(--acc);
+        color: var(--accink);
+      }
+      /* setup */
+      #setup {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 24px;
+        display: grid;
+        grid-template-columns: 1.05fr 1fr;
+        gap: 40px;
+        align-items: center;
+        min-height: calc(100vh - 52px);
+      }
+      .brand {
+        font-weight: 750;
+        letter-spacing: 0.02em;
+        color: var(--acc);
+      }
+      h1 {
+        font-size: clamp(2rem, 4.4vw, 3.1rem);
+        line-height: 1.1;
+        margin: 0.4rem 0 1rem;
+        letter-spacing: -0.02em;
+      }
+      .lead {
+        color: var(--mute);
+        max-width: 34ch;
+      }
+      .tips {
+        list-style: none;
+        padding: 0;
+        margin: 1.6rem 0 0;
+        display: grid;
+        gap: 0.7rem;
+        color: var(--mute);
+        font-size: 0.95rem;
+      }
+      .tips li {
+        display: flex;
+        gap: 0.7rem;
+        align-items: flex-start;
+      }
+      .tips b {
+        color: var(--teal);
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 24px;
+        box-shadow: var(--sh);
+        display: grid;
+        gap: 16px;
+      }
+      label.f {
+        display: grid;
+        gap: 6px;
+        font-size: 0.85rem;
+        color: var(--mute);
+        font-weight: 600;
+      }
+      .in {
+        border: 1px solid var(--line);
+        background: transparent;
+        border-radius: 12px;
+        padding: 0.7rem 0.85rem;
+        width: 100%;
+      }
+      .len {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+      .len label {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        cursor: pointer;
+        display: grid;
+        gap: 2px;
+        font-size: 0.85rem;
+        color: var(--mute);
+      }
+      .len b {
+        color: var(--ink);
+        font-size: 1rem;
+      }
+      .len input {
+        position: absolute;
+        opacity: 0;
+      }
+      .len label:has(input:checked) {
+        border-color: var(--acc);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 22%, transparent);
+      }
+      .mic {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .meter {
+        display: flex;
+        gap: 3px;
+        align-items: flex-end;
+        height: 22px;
+      }
+      .meter span {
+        width: 5px;
+        height: 4px;
+        border-radius: 3px;
+        background: var(--teal);
+        transition: height 0.09s;
+      }
+      .chip {
+        font-size: 0.8rem;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--teal) 16%, transparent);
+        color: var(--teal);
+        font-weight: 650;
+      }
+      .warn {
+        font-size: 0.82rem;
+        color: var(--mute);
+        border-left: 3px solid var(--red);
+        padding-left: 10px;
+      }
+      .chk {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        font-size: 0.9rem;
+        color: var(--mute);
+      }
+      /* room */
+      #room {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        height: calc(100vh - 52px);
+        padding: 16px 22px 20px;
+        gap: 8px;
+      }
+      .top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        font-size: 0.9rem;
+        color: var(--mute);
+      }
+      .top .brand {
+        font-size: 0.95rem;
+      }
+      .prog {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .dot {
+        width: 26px;
+        height: 6px;
+        border-radius: 4px;
+        background: var(--line);
+      }
+      .dot.d {
+        background: var(--teal);
+      }
+      .dot.c {
+        background: var(--acc);
+      }
+      .timer {
+        font-variant-numeric: tabular-nums;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .rec {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--red);
+        animation: blink 1.4s infinite;
+      }
+      .stage {
+        position: relative;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 22px;
+        text-align: center;
+      }
+      .orb {
+        position: relative;
+        width: min(42vmin, 300px);
+        aspect-ratio: 1;
+        display: grid;
+        place-items: center;
+        transition: opacity 0.4s;
+      }
+      .orb i {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 35% 30%, var(--o1), transparent 62%),
+          radial-gradient(circle at 68% 72%, var(--o2), transparent 60%);
+        opacity: 0.35;
+        transform: scale(calc(0.62 + var(--l, 0) * 0.38 * var(--k, 1)));
+        transition: transform 0.12s linear;
+      }
+      .orb i:nth-child(2) {
+        --k: 0.75;
+        opacity: 0.5;
+      }
+      .orb i:nth-child(3) {
+        --k: 0.5;
+        opacity: 0.85;
+        filter: blur(1px);
+      }
+      .orb::after {
+        content: "";
+        position: relative;
+        z-index: 2;
+        width: 34%;
+        aspect-ratio: 1;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--o1), var(--o2));
+        box-shadow: 0 0 70px var(--o1);
+      }
+      #room[data-s="listening"] .orb {
+        opacity: 0.55;
+      }
+      #room[data-s="thinking"] .orb i {
+        animation: spin 5s linear infinite;
+      }
+      #room[data-s="thinking"] .orb i:nth-child(2) {
+        animation-direction: reverse;
+      }
+      .who {
+        font-weight: 650;
+      }
+      #status {
+        color: var(--mute);
+        min-height: 1.5em;
+      }
+      .dots span {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        margin: 0 2px;
+        border-radius: 50%;
+        background: var(--mute);
+        animation: blink 1s infinite;
+      }
+      .dots span:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .dots span:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      #cap {
+        max-width: 56ch;
+        min-height: 3em;
+        font-size: 1.15rem;
+        line-height: 1.45;
+      }
+      .me {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        width: 176px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 12px;
+        display: grid;
+        gap: 8px;
+        justify-items: center;
+        box-shadow: var(--sh);
+      }
+      .av {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        background: linear-gradient(135deg, var(--o1), var(--o2));
+        color: #08122b;
+        transition: box-shadow 0.1s;
+        box-shadow: 0 0 0 calc(var(--u, 0) * 10px)
+          color-mix(in srgb, var(--teal) 35%, transparent);
+      }
+      .me small {
+        color: var(--mute);
+      }
+      .bar {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .tog {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 12px;
+        padding: 0.7rem 1rem;
+        cursor: pointer;
+      }
+      .tog[aria-pressed="true"] {
+        border-color: var(--acc);
+        color: var(--acc);
+      }
+      svg {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0.25;
+        }
+      }
+      @keyframes spin {
+        to {
+          rotate: 360deg;
+        }
+      }
+      @media (max-width: 760px) {
+        #setup {
+          grid-template-columns: 1fr;
+          gap: 24px;
+        }
+        .me {
+          position: static;
+        }
+        .len {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="review" role="group" aria-label="Design review: switch screen">
+      <button data-v="setup" class="on">Setup</button
+      ><button data-v="speaking">Speaking</button
+      ><button data-v="listening">Listening</button
+      ><button data-v="thinking">Thinking</button>
+    </div>
+
+    <main id="setup">
+      <section>
+        <div class="brand">SpeakSure</div>
+        <h1>Practise a real interview, out loud.</h1>
+        <p class="lead">
+          An AI interviewer asks, listens and follows up. You get a clear
+          feedback report at the end.
+        </p>
+        <ul class="tips">
+          <li>
+            <b>1</b
+            ><span
+              >Speak naturally. The interviewer decides when you have finished,
+              so there are no buttons to press.</span
+            >
+          </li>
+          <li>
+            <b>2</b
+            ><span
+              >Use your laptop or a wired microphone. Bluetooth headset
+              microphones sound muffled.</span
+            >
+          </li>
+          <li>
+            <b>3</b
+            ><span
+              >Listen instead of reading. Captions are off by default, like a
+              real call.</span
+            >
+          </li>
+        </ul>
+      </section>
+      <section class="card" aria-label="Interview setup">
+        <label class="f"
+          >Your name<input class="in" value="Haswanth" autocomplete="name"
+        /></label>
+        <label class="f"
+          >Role you are interviewing for
+          <select class="in">
+            <option>Software engineering fresher</option>
+            <option>Data analyst</option>
+            <option>Customer support associate</option>
+            <option>Other (type below)</option>
+          </select></label
+        >
+        <div class="f" id="lenlabel">Length</div>
+        <div class="len" role="radiogroup" aria-labelledby="lenlabel">
+          <label
+            ><input type="radio" name="l" checked /><b>Quick</b>3 questions ·
+            about 8 min</label
+          >
+          <label
+            ><input type="radio" name="l" /><b>Standard</b>5 questions · about
+            15 min</label
+          >
+          <label
+            ><input type="radio" name="l" /><b>Full</b>8 questions · about 25
+            min</label
+          >
+        </div>
+        <label class="f"
+          >Microphone
+          <span class="mic"
+            ><select class="in">
+              <option>Microphone Array (Realtek)</option>
+              <option>Headset (Airdopes 161)</option>
+            </select>
+            <button class="btn ghost" id="test" type="button">
+              Test
+            </button></span
+          ></label
+        >
+        <div class="mic">
+          <div class="meter" id="meter" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span
+            ><span></span>
+          </div>
+          <span class="chip" id="chip">Ready to test</span>
+        </div>
+        <p class="warn">
+          This looks like a Bluetooth headset. Its microphone usually records
+          muffled audio. Prefer the laptop microphone.
+        </p>
+        <label class="f"
+          >Names or tools you may mention (optional)<input
+            class="in"
+            placeholder="IIITDM Kurnool, TensorFlow, Maya Patel"
+        /></label>
+        <label class="chk"
+          ><input type="checkbox" checked /> Include AI content scoring in my
+          report</label
+        >
+        <label class="chk"
+          ><input type="checkbox" /> Show my camera while I answer (preview
+          only, never recorded)</label
+        >
+        <button class="btn" id="go" type="button">
+          Join the interview room
+        </button>
+      </section>
+    </main>
+
+    <main id="room" class="hide" data-s="speaking">
+      <header class="top">
+        <div class="brand">
+          SpeakSure
+          <span style="color: var(--mute); font-weight: 500"
+            >· HR interview</span
+          >
+        </div>
+        <div class="prog" aria-label="Question 2 of 5">
+          <span class="dot d"></span><span class="dot c"></span
+          ><span class="dot"></span><span class="dot"></span
+          ><span class="dot"></span
+          ><span style="margin-left: 6px">Question 2 of 5</span>
+        </div>
+        <div class="timer">
+          <span class="rec"></span><span id="clock">04:12</span>
+        </div>
+      </header>
+      <section class="stage">
+        <div class="orb" id="orb" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div>
+          <div class="who">Interviewer</div>
+          <div id="status" role="status" aria-live="polite">
+            Interviewer is speaking
+          </div>
+        </div>
+        <p id="cap" class="hide" aria-live="polite"></p>
+        <aside class="me" aria-label="You">
+          <div class="av" id="av">H</div>
+          <div class="meter" id="meter2">
+            <span></span><span></span><span></span><span></span><span></span
+            ><span></span>
+          </div>
+          <small>You · Microphone on</small>
+        </aside>
+      </section>
+      <footer class="bar">
+        <button class="tog" id="cc" aria-pressed="false" type="button">
+          <svg viewBox="0 0 24 24">
+            <rect x="3" y="5" width="18" height="14" rx="3" />
+            <path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3" /></svg
+          >Captions off
+        </button>
+        <button class="tog" type="button">
+          <svg viewBox="0 0 24 24">
+            <path d="M3 12h4M9 6v12M15 3v18M21 9v6" /></svg
+          >Repeat question
+        </button>
+        <button class="btn end" type="button">End interview</button>
+      </footer>
+    </main>
+    <script>
+      const $ = (s) => document.querySelector(s),
+        $$ = (s) => [...document.querySelectorAll(s)];
+      const txt = {
+        speaking:
+          "Thanks. Could you tell me about a time you worked in a team to get something done?",
+        listening: "",
+        thinking: "",
+      };
+      const msg = {
+        speaking: "Interviewer is speaking",
+        listening: "Your turn · listening",
+        thinking:
+          'Thinking about your answer <span class="dots"><span></span><span></span><span></span></span>',
+      };
+      let cur = "setup",
+        caps = false;
+      function show(v) {
+        cur = v;
+        $("#setup").classList.toggle("hide", v !== "setup");
+        $("#room").classList.toggle("hide", v === "setup");
+        $$("[data-v]").forEach((b) =>
+          b.classList.toggle("on", b.dataset.v === v),
+        );
+        if (v !== "setup") {
+          $("#room").dataset.s = v;
+          $("#status").innerHTML = msg[v];
+          const c = $("#cap");
+          c.textContent = txt[v];
+          c.classList.toggle("hide", !caps || !txt[v]);
+        }
+      }
+      $$("[data-v]").forEach((b) => (b.onclick = () => show(b.dataset.v)));
+      $("#go").onclick = () => show("speaking");
+      $("#cc").onclick = (e) => {
+        caps = !caps;
+        e.currentTarget.setAttribute("aria-pressed", caps);
+        e.currentTarget.lastChild.textContent = caps
+          ? "Captions on"
+          : "Captions off";
+        show(cur);
+      };
+      const bars = (id, l) =>
+        $$(id + " span").forEach(
+          (s, i) =>
+            (s.style.height =
+              4 +
+              Math.max(
+                0,
+                l *
+                  18 *
+                  (1 - Math.abs(i - 2.5) / 4) *
+                  (0.6 + Math.random() * 0.6),
+              ) +
+              "px"),
+        );
+      let testing = false;
+      $("#test").onclick = () => {
+        testing = !testing;
+        $("#chip").textContent = testing ? "Speak now…" : "Good level";
+      };
+      setInterval(() => {
+        const r = $("#orb"),
+          s = $("#room").dataset.s;
+        r.style.setProperty(
+          "--l",
+          s === "speaking"
+            ? 0.35 + Math.random() * 0.65
+            : s === "listening"
+              ? 0.05
+              : 0.12,
+        );
+        const u = s === "listening" ? Math.random() * 0.9 : 0;
+        $("#av").style.setProperty("--u", u);
+        bars("#meter2", u);
+        bars("#meter", testing ? Math.random() : 0);
+      }, 110);
+      let t = 252;
+      setInterval(() => {
+        if (cur !== "setup") {
+          t++;
+          $("#clock").textContent =
+            String((t / 60) | 0).padStart(2, "0") +
+            ":" +
+            String(t % 60).padStart(2, "0");
+        }
+      }, 1000);
+    </script>
+  </body>
+</html>

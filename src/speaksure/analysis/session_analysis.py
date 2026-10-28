@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..llm_client import LLMClient
 from ..question_bank import HR_QUESTIONS
@@ -23,16 +23,22 @@ def analyze_session(
     audio_root: Path = Path("."),
     llm: LLMClient | None = None,
     role: str = "software engineering fresher",
+    progress_callback: Callable[[str, float], None] | None = None,
 ) -> InterviewSession:
     """Return a deep-copied session with transcript, audio, and optional content analysis."""
     analyzed = copy.deepcopy(session)
     fluencies = []
     transcript_qualities = []
     audio_deliveries = []
-    for turn in analyzed.turns:
+    turn_count = len(analyzed.turns)
+    if progress_callback is not None:
+        progress_callback("grammar", 0.0)
+    for turn_index, turn in enumerate(analyzed.turns, start=1):
         fluency = analyze_fluency(turn.answer, turn.thinking_time_seconds)
         grammar = analyze_grammar(turn.answer)
         transcript_quality = analyze_transcript_quality(turn.answer)
+        if progress_callback is not None:
+            progress_callback("delivery", (turn_index - 1) / max(1, turn_count))
         audio_delivery = analyze_audio_delivery(
             turn.audio_path, int(fluency["word_count"]), audio_root
         )
@@ -43,6 +49,9 @@ def analyze_session(
         fluencies.append(fluency)
         transcript_qualities.append(transcript_quality)
         audio_deliveries.append(audio_delivery)
+        if progress_callback is not None:
+            progress_callback("grammar", turn_index / max(1, turn_count))
+            progress_callback("delivery", turn_index / max(1, turn_count))
 
     wpm_by_turn = [metric["words_per_minute"] for metric in fluencies]
     pause_ratio_by_turn = [metric["pause_ratio"] for metric in fluencies]
@@ -132,6 +141,7 @@ def analyze_session(
             transcript_qualities,
             llm,
             role,
+            progress_callback=progress_callback,
         )
     return analyzed
 
@@ -141,6 +151,7 @@ def _analyze_content_groups(
     transcript_qualities: list[dict[str, object]],
     llm: LLMClient,
     role: str,
+    progress_callback: Callable[[str, float], None] | None = None,
 ) -> None:
     """Analyze consecutive question groups, attach references, and summarize scores."""
     bank_by_id = {question.id: question for question in HR_QUESTIONS}
@@ -156,6 +167,8 @@ def _analyze_content_groups(
             groups.append(([turn_index], question_id, source))
 
     content_by_question: list[dict[str, Any]] = []
+    if progress_callback is not None:
+        progress_callback("content", 0.0)
     for group_index, (turn_indexes, question_id, source) in enumerate(groups, start=1):
         turns = [session.turns[index] for index in turn_indexes]
         asr_mean = _group_asr_mean(turn_indexes, session.turns, transcript_qualities)
@@ -190,6 +203,8 @@ def _analyze_content_groups(
                 "main_question_id": question_id,
                 "group_index": group_index,
             }
+        if progress_callback is not None:
+            progress_callback("content", group_index / max(1, len(groups)))
 
     rated = [result for result in content_by_question if result["rated"]]
     content_score_by_question = [

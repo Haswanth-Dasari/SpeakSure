@@ -1,122 +1,287 @@
 # SpeakSure
 
-SpeakSure helps people build confidence in English communication through realistic practice. Version 0.5.0 adds local speech recognition with faster-whisper, alongside the optional OpenAI transcription backend.
+SpeakSure is a local-first, voice-first interview coach for practising spoken
+job interviews. It listens to a candidate, transcribes each answer with local
+speech recognition by default, generates an interviewer response, speaks it
+with Piper, and saves an analyzable session and feedback report.
 
-## Features
+## Table of contents
 
-- Configure 10, 15, 30, or 60 minute sessions across four practice modes and three difficulty levels.
-- Submit answers, retain session history across Streamlit reruns, and review a completed transcript.
-- When configured, AI asks one concise follow-up based on the selected mode, difficulty, previous questions, and answers. HR interview mode uses a professional interviewer voice.
-- Without an API key, the app clearly labels and cycles through curated scripted prompts for each practice mode. If an AI request fails, retry it or switch to scripted prompts; the submitted answer remains recorded once and the selected session configuration is preserved.
-- Record a response in the browser, transcribe it locally by default, and review or edit the recognized text before submitting. Typed answers remain available. OpenAI transcription remains available as an explicitly selected backend.
+- [Demo flow](#demo-flow)
+- [Architecture overview](#architecture-overview)
+- [Windows PowerShell setup](#windows-powershell-setup)
+- [Configuration](#configuration)
+- [Run the web interview](#run-the-web-interview)
+- [Run the terminal interview](#run-the-terminal-interview)
+- [Analyze a session](#analyze-a-session)
+- [Generate a report](#generate-a-report)
+- [Evaluation toolkit](#evaluation-toolkit)
+- [Privacy](#privacy)
+- [Limitations](#limitations)
+- [Project structure](#project-structure)
+- [Licences and models](#licences-and-models)
+- [Use of AI assistance](#use-of-ai-assistance)
 
-The chosen duration is a session setting and does not enforce a timer. Audio is handled in memory for transcription and is not permanently stored by SpeakSure. Local audio inference stays on this computer; first use downloads the selected model from Hugging Face and therefore needs internet access. Speech synthesis uses Piper (GPL-licensed engine); each voice model has its own license, so see its model card on Hugging Face. Speech/emotion analysis is not implemented.
+## Demo flow
 
-## Setup on Windows PowerShell
+In the **terminal flow**, the candidate chooses a role and question count, then
+answers through a microphone. The interviewer waits for the VAD end-of-speech
+window, transcribes locally, asks a follow-up or the next question, and speaks
+the reply. In the **web flow**, the candidate selects a microphone and options
+in the browser, joins the interview room, and speaks without a review-before-
+send step. Both flows use the shared interviewer-turn processor and save
+session JSON and audio locally. At the end, analysis can produce an HTML report.
 
-From the SpeakSure project directory:
+## Architecture overview
+
+```text
+Browser capture ─┐
+                 ├─> CapturedAnswer/WAV ─> local STT ─> shared turn processor
+Terminal capture ┘                                  │
+                                                    ├─> interviewer / Groq LLM
+                                                    ├─> Piper TTS ─> interviewer audio
+                                                    └─> session JSON + local WAV
+                                                               │
+                                      fluency / grammar / transcript-quality /
+                                      audio-delivery / optional content analysis
+                                                               │
+                                                     standalone HTML report
+```
+
+The browser and terminal use the same `process_interview_turn` path. Offline
+analyzers produce delivery, fluency, grammar, and transcript-confidence
+measures. When enabled, content scoring uses a language model and per-question
+rubrics. The HTML report combines these results without requiring a hosted UI.
+
+## Windows PowerShell setup
+
+Run these commands from the SpeakSure project directory. Python 3.12 is the
+tested interpreter:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+New-Item -ItemType Directory -Force models\piper | Out-Null
 ```
 
-SpeakSure's requirements install spaCy and the pinned `en_core_web_sm` model
-wheel; this one-time setup needs internet access. Grammar feedback then runs
-offline, uses the CPU, and does not need Java or an API key. If either dependency
-is missing after setup, the report marks grammar analysis unavailable instead
-of attempting a download at runtime.
+`requirements-dev.txt` includes the runtime requirements and adds pytest and
+httpx. The spaCy English model is pinned in the runtime requirements. The first
+faster-whisper inference downloads the selected STT model to the local model
+cache. The Piper ONNX voice files are stored under the ignored `models/`
+directory and are not committed. Obtain and place a voice model and its JSON
+configuration there only after confirming that the voice's upstream license
+permits your use; the currently configured Lessac voice points to a research
+license requiring approval.
 
-Local transcription is the default and does not need `OPENAI_API_KEY` or OpenAI API credits. Configure it in the project-root `.env` or process environment:
+The app loads `.env` from the project root without overriding values already
+set in the process environment. `.env.example` documents the recommended
+`SPEECH_TO_TEXT_MODEL_SIZE=medium` setting for a 6 GB GPU; the code default
+remains `base`. Use `medium` only if GPU memory permits. For a CPU-only system,
+set `SPEECH_TO_TEXT_DEVICE=cpu`.
 
-```dotenv
-SPEECH_TO_TEXT_PROVIDER=local
-SPEECH_TO_TEXT_MODEL_SIZE=base
-SPEECH_TO_TEXT_DEVICE=auto
-```
+## Configuration
 
-The `base` model is a practical starting point for a 6 GB GPU and CPU fallback. `small` may be more accurate but uses more memory and runs slower. `SPEECH_TO_TEXT_DEVICE=auto` uses CUDA only when CTranslate2 reports a CUDA device; otherwise it uses CPU `int8`. If CUDA model initialization or inference fails in auto mode, local inference retries with CPU `int8`. Set the device to `cuda` to require CUDA (no CPU fallback), or `cpu` to force CPU. CUDA acceleration requires compatible NVIDIA drivers and CUDA/cuDNN libraries recognized by CTranslate2; an installed NVIDIA GPU alone does not guarantee CUDA inference. On Windows, SpeakSure discovers DLL folders in installed NVIDIA Python packages and adds them to the current process's PATH before importing CTranslate2 or Faster-Whisper. It does not modify the machine-wide PATH.
+For each setting, precedence is **process environment > project-root `.env` >
+built-in default**. Blank values generally select the default. The `OPENAI_*`
+settings are for the optional OpenAI speech transcription backend or the
+archived prototype; the current live interviewer and content analysis use the
+Groq settings.
 
-The first local use downloads model weights to the faster-whisper/Hugging Face cache and needs an internet connection. Later runs reuse that cache. Local recordings and transcripts are processed in memory; SpeakSure does not send audio to a transcription service or store audio recordings.
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | empty | Credential for the optional OpenAI STT provider and archived prototype. |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Chat model setting retained for the archived prototype. |
+| `OPENAI_TRANSCRIPTION_MODEL` | `whisper-1` | Model used when `SPEECH_TO_TEXT_PROVIDER=openai`. |
+| `GROQ_API_KEY` | empty | Enables the current Groq interviewer and optional content scoring. |
+| `LLM_MODEL` | `openai/gpt-oss-20b` | Groq model for live interviewer responses. |
+| `LLM_REASONING_EFFORT` | `low` | Groq interviewer reasoning effort: empty, low, medium, or high. |
+| `LLM_TIMEOUT_SECONDS` | `20` | Groq request timeout, from 1 to 120 seconds. |
+| `LLM_ANALYSIS_MODEL` | `openai/gpt-oss-120b` | Groq model used for content analysis. |
+| `LLM_ANALYSIS_REASONING_EFFORT` | `medium` | Groq content-analysis reasoning effort: empty, low, medium, or high. |
+| `SPEECH_TO_TEXT_PROVIDER` | `local` | `local` selects faster-whisper; `openai` sends audio to OpenAI. |
+| `SPEECH_TO_TEXT_MODEL_SIZE` | `base` | Local faster-whisper model size; `medium` is recommended for a 6 GB GPU if it fits. |
+| `SPEECH_TO_TEXT_DEVICE` | `auto` | Local inference device: `auto`, `cuda`, or `cpu`. |
+| `SPEECH_TO_TEXT_LANGUAGE` | `en` | Language code for local transcription. |
+| `SPEECH_TO_TEXT_VAD_FILTER` | `true` | Enable faster-whisper VAD filtering for local transcription. |
+| `SPEECH_TO_TEXT_HOTWORDS` | empty | Optional domain terms passed to local transcription. |
+| `SPEECH_TO_TEXT_INITIAL_PROMPT` | empty | Optional local transcription prompt, up to 300 characters. |
+| `TEXT_TO_SPEECH_VOICE` | `en_US-lessac-medium` | Piper voice name. |
+| `TEXT_TO_SPEECH_MODELS_DIR` | `models/piper` | Directory containing Piper ONNX voice files. |
+| `TEXT_TO_SPEECH_LENGTH_SCALE` | `1.0` | Piper speaking-rate scale, from 0.5 to 2.0. |
+| `TEXT_TO_SPEECH_LEADING_SILENCE_SECONDS` | `0.15` | Silence added before synthesized audio, from 0 to 1 second. |
+| `TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS` | `0.5` | Silence added after synthesized audio, from 0 to 2 seconds. |
+| `PATH` | Windows process/system path | Used to locate CUDA DLLs; SpeakSure may prepend discovered package DLL folders to the Python process PATH, not the machine-wide PATH. |
 
-To use paid API transcription instead, explicitly select `SPEECH_TO_TEXT_PROVIDER=openai`, configure `OPENAI_API_KEY`, and optionally set `OPENAI_TRANSCRIPTION_MODEL` (default `whisper-1`). `OPENAI_MODEL` selects the separate AI follow-up model (default `gpt-4o-mini`). The OpenAI backend sends recordings to OpenAI and may incur charges. Backend selection does not silently fall back: a selected provider error is shown rather than invoking the other backend.
+## Run the web interview
 
-SpeakSure loads the project-root `.env` independently of the shell's current directory, without overriding values already set in the process environment. `.env.example` contains placeholders/defaults and is not loaded automatically. Restart Streamlit after changing configuration.
-
-## Configuration precedence
-
-For every setting, SpeakSure uses the process environment first, then the
-project-root `.env`, then the built-in default. For example, this PowerShell
-override selects `tiny` for one run of the transcription demo:
+Start the local server and open the printed address in Chrome or Edge:
 
 ```powershell
-$env:SPEECH_TO_TEXT_MODEL_SIZE = "tiny"
-python scripts/transcribe_demo.py .\harvard.wav
-Remove-Item Env:SPEECH_TO_TEXT_MODEL_SIZE
+.\.venv\Scripts\python.exe scripts\run_web.py --host 127.0.0.1 --port 8000
 ```
 
-Run this safe diagnostic from PowerShell in the project root. It reports the selected provider/model, device available to CTranslate2, initialized device, and dependency presence. Before the first successful transcription in that Python process, `actual_device` is `not-initialized`; the app also displays the device used after local inference. The diagnostic never prints the API key:
+The setup screen reports model readiness. Grant microphone access, test the
+selected input, and join the room. Camera preview is optional and is never
+uploaded or stored. Captions are off by default. When the interview ends, the
+room prepares the feedback and displays the report in an embedded frame.
+
+## Run the terminal interview
+
+The terminal loop requires a microphone and output device, a working Piper
+voice, and `GROQ_API_KEY` for live model-generated interviewer turns. Without a
+Groq key, startup reports a configuration error rather than silently switching
+to another provider.
 
 ```powershell
-Set-Location '<project-root>'
-& '.\.venv\Scripts\python.exe' -c "import json; from src.speaksure.speech_to_text import diagnose_transcription_configuration; print(json.dumps(diagnose_transcription_configuration(), indent=2))"
+.\.venv\Scripts\python.exe scripts\live_interview.py --questions 3 --role 'software engineering fresher' --name 'Candidate'
 ```
 
-Microphone recording uses Streamlit's built-in `st.audio_input` and requires a supported, up-to-date browser and permission to use the microphone. The app accepts audio formats supported by the transcription provider (including the widget's WAV recording) up to 25 MB. If microphone access or transcription is unavailable, users can continue by typing.
+Use `--help` to see question, follow-up, device, end-silence, and save options.
+Completed and interrupted interviews are saved beneath `data/sessions`.
 
-Install dependencies in the project virtual environment:
+## Analyze a session
+
+Analysis adds local fluency, grammar, transcript-confidence, and WAV delivery
+signals. Add `--content` to request per-question content scoring; this requires
+`GROQ_API_KEY` and sends transcript text to the configured model.
 
 ```powershell
-Set-Location '<project-root>'
-& '.\.venv\Scripts\python.exe' -m pip install -r requirements.txt
-& '.\.venv\Scripts\python.exe' -m streamlit run app.py
+$session = Get-ChildItem data\sessions -Filter 'session_*.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($null -eq $session) { throw 'Run an interview first; no session JSON was found.' }
+.\.venv\Scripts\python.exe scripts\analyze_session.py $session.FullName --content --role 'software engineering fresher' --force
 ```
 
-For CPU-only operation, set `SPEECH_TO_TEXT_DEVICE=cpu`; faster-whisper uses `int8` CPU inference. If CUDA is explicitly requested and CTranslate2 cannot initialize it, configure CPU mode. Model download failures need an internet connection on the first load; model loading errors, unavailable CUDA, unsupported audio, and inference errors are reported without switching to the OpenAI backend.
-
-CPU fallback remains available when CUDA libraries are missing or CUDA initialization fails. Review and correct the editable transcript before submitting. GPU availability and successful inference depend on the local driver and installed CUDA libraries.
-
-## Tests
+Analyzed JSON is written under `data/analysis` unless `--out` is specified.
+For timing summaries, pass a session file or the sessions directory to:
 
 ```powershell
-python -m pytest -q
+.\.venv\Scripts\python.exe scripts\latency_report.py data\sessions
 ```
 
-Provider unit tests mock faster-whisper and the OpenAI SDK. They do not download model weights, make network calls, require real API credentials, or execute on a GPU. Browser microphone permission, actual model download/inference, and hardware device selection still need to be checked manually on the target machine.
+This prints a Markdown table of stage median, nearest-rank 90th percentile, and
+maximum. It writes `latency_report.md` beside the input. Total response latency
+adds end-of-speech wait, browser upload when measured, STT, LLM, and TTS
+synthesis time.
 
-To try a typed-text HR mock interview with the configured Groq language model, run `python scripts/interviewer_demo.py --questions 3 --name Haswanth`. Use `--follow-ups`, `--role`, `--seed`, or `--no-save` to adjust the session; by default, completed and interrupted sessions are saved under `data/sessions`.
+## Generate a report
+
+Render a standalone HTML report from the newest analyzed session:
+
+```powershell
+$analyzed = Get-ChildItem data\analysis -Filter '*.analyzed.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($null -eq $analyzed) { throw 'Analyze a session first; no analyzed JSON was found.' }
+.\.venv\Scripts\python.exe scripts\make_report.py $analyzed.FullName
+```
+
+The HTML report is saved under `data/reports` by default and can be opened in a
+browser or printed.
 
 ## Evaluation toolkit
 
-E1 ASR: record prompted clips and benchmark them by model, device, and category.
+Evaluation prompts, manifests, grammar cases, and collected clips are
+course-specific local files under the ignored `data/eval` directory and are
+not distributed in the repository. After preparing `prompts.txt`, record a
+manifest and benchmark the selected models:
+
 ```powershell
-Copy-Item data/eval/prompts.example.txt data/eval/prompts.txt
-python scripts/record_eval_clips.py --prompts data/eval/prompts.txt
-python scripts/asr_benchmark.py --manifest data/eval/manifest.csv --models base,small --group-by model,input_device,category
+if (-not (Test-Path data\eval\prompts.txt)) { throw 'Create the course prompt list at data\eval\prompts.txt first.' }
+.\.venv\Scripts\python.exe scripts\record_eval_clips.py --prompts data\eval\prompts.txt
+if (-not (Test-Path data\eval\manifest.csv)) { throw 'Recording must produce data\eval\manifest.csv before benchmarking.' }
+.\.venv\Scripts\python.exe scripts\asr_benchmark.py --manifest data\eval\manifest.csv --models base,small --group-by model,input_device,category
 ```
-E2 grammar: evaluate the labelled, by-construction cases; the labels are not an independent gold standard.
-`python scripts/eval_grammar.py`
-E2 real speech: export flags with `python scripts/review_grammar_flags.py analyzed.json`, fill verdicts, then calculate precision with `python scripts/review_grammar_flags.py --score`.
-E3 content: create blind sheets with `python scripts/make_rating_sheet.py data/analysis/session.analyzed.json`, fill ratings, then run `python scripts/eval_content.py ratings.csv data/analysis/session.analyzed.json --merge more-ratings.csv`.
-E3 stability: repeat content scoring with `python scripts/analyze_session.py session.json --content --repeat 5 --out data/analysis/session_runs.json`, then summarize with `python scripts/content_stability.py data/analysis/session_runs.json`.
-The E1 recorder stores the selected microphone and category; `e` edits references to match what was actually spoken.
-E2 case labels are deliberately injected for evaluation and must not be read as human-validated annotation.
-E3 student ratings are never populated by the rating-sheet generator; score agreement only after blind ratings are complete.
 
-## Web app
+After an interview and analysis, use the most recent session paths for grammar
+review and content evaluation:
 
-Start the local server with `python scripts/run_web.py` and open `http://127.0.0.1:8000` in Google Chrome or Microsoft Edge.
-Microphone advice: Prefer a laptop microphone or wired input; avoid Bluetooth hands-free profiles due to muffled audio.
+```powershell
+$session = Get-ChildItem data\sessions -Filter 'session_*.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($null -eq $session) { throw 'Run an interview first; no session JSON was found.' }
+$analyzedPath = Join-Path data\analysis ($session.BaseName + '.analyzed.json')
+if (-not (Test-Path $analyzedPath)) { throw 'Analyze the session before continuing.' }
+if (-not (Test-Path data\eval\grammar_cases.csv)) { throw 'Prepare labelled cases at data\eval\grammar_cases.csv first.' }
+.\.venv\Scripts\python.exe scripts\eval_grammar.py
+.\.venv\Scripts\python.exe scripts\review_grammar_flags.py $analyzedPath
+.\.venv\Scripts\python.exe scripts\make_rating_sheet.py $analyzedPath
+```
 
-Manual test checklist (10 steps):
-1. Setup: Check STT model status, set 3 questions, enter candidate name and optional vocabulary hints.
-2. Mic grant: Click "Grant microphone" and select your laptop microphone from the enumerated list.
-3. Mic test: Click "Test microphone", speak for 3 seconds, confirm "Good level", and play back test audio.
-4. Begin interview: Click "Start interview", listen to the interviewer audio, and verify automatic listening turn start.
-5. Normal turn: Speak an answer; verify live level meter and automatic answer submission after 2.5 s of silence.
-6. Transcript & flags: Verify "What I heard:" displays your transcript with any relevant delivery flags.
-7. Repeat request: In a turn, ask for clarification or test 15 s silence timeout ("I did not hear you" retry).
-8. Early end: Click "End interview early", confirm the prompt, and verify transition to the results screen.
-9. Report display: Observe status polling until "ready", then review the report rendered inside the sandboxed iframe.
-10. Past sessions: Click "Start new interview", verify the completed session appears in the list, and open its report link.
+Complete the generated blind ratings CSV, then calculate content-score agreement
+or repeat scoring for stability:
+
+```powershell
+$ratings = Get-ChildItem data\eval\ratings -Filter '*.ratings.csv' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($null -eq $ratings) { throw 'Complete a generated rating sheet first.' }
+.\.venv\Scripts\python.exe scripts\eval_content.py $ratings.FullName $analyzedPath
+.\.venv\Scripts\python.exe scripts\analyze_session.py $session.FullName --content --repeat 5 --out data\analysis\session_runs.json --force
+.\.venv\Scripts\python.exe scripts\content_stability.py data\analysis\session_runs.json
+```
+
+Grammar case labels are by construction, not independent human gold labels.
+Human ratings must be completed blind before agreement statistics are
+calculated.
+
+## Privacy
+
+The default STT path is local faster-whisper. Under that setting, recorded audio
+and transcripts are kept locally under `data/sessions`; no audio is sent to a
+speech-recognition service. The explicitly selected `openai` STT provider does
+send audio to OpenAI. When `GROQ_API_KEY` is configured, transcript text is
+sent to Groq for live interviewer responses; enabling content scoring also
+sends transcripts for rubric scoring. Piper TTS runs locally. Session JSON,
+audio, model caches, and reports are ignored by Git.
+
+## Limitations
+
+- Recognition can miss names, technical terms, accents, and speech in noise.
+- The capture and analysis paths assume a single speaker; overlapping speech
+  and multiple speakers are not diarized.
+- Grammar feedback is a small rule-based heuristic, not a complete grammar
+  judgment; ASR errors can cause misleading flags.
+- Content scores are approximate and can vary between LLM runs.
+- The app measures delivery signals such as pauses and level variation; it does
+  not infer emotion or personality.
+
+## Project structure
+
+```text
+src/speaksure/       Live interview, speech, analysis, web, and report modules
+scripts/             Runnable demos, interview entry points, and evaluation tools
+tests/               Automated tests; tests/fixtures/ holds the WAV test sample
+legacy/              Archived Streamlit prototype and its excluded tests
+docs/                Architecture notes and UI reference
+data/                Ignored local session, evaluation, analysis, and report files
+models/              Ignored local voice/model weights
+requirements.txt     Pinned runtime dependencies
+requirements-dev.txt Runtime dependencies plus pytest and httpx
+```
+
+See [scripts/README.md](scripts/README.md) for a purpose and example command for
+every script, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module
+map, schemas, data flow, and web API.
+
+## Licences and models
+
+The Piper engine and the Piper voice collection repository declare MIT
+licences, but voice data can have additional source-dataset terms. The model
+card for `en_US-lessac-medium` names the Lessac Blizzard 2013 dataset and links
+to a research licence that requires approval; the collection's repository
+licence does not replace that dataset licence. Check the exact voice and
+dataset terms before using or redistributing its weights. The installed
+`en_core_web_sm` spaCy model is MIT licensed. faster-whisper and the OpenAI
+Whisper project are MIT licensed; downloaded weights and all other
+third-party assets remain subject to their own upstream terms.
+
+- Piper engine licence: <https://github.com/rhasspy/piper/blob/master/LICENSE.md>
+- Piper voice collection: <https://huggingface.co/rhasspy/piper-voices>
+- Lessac medium voice model card: <https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/lessac/medium/MODEL_CARD>
+- Lessac dataset research licence: <https://www.cstr.ed.ac.uk/projects/blizzard/2013/lessac_blizzard2013/license.html>
+- spaCy model package: <https://spacy.io/models/en>
+- faster-whisper licence: <https://github.com/SYSTRAN/faster-whisper/blob/master/LICENSE>
+- Whisper licence: <https://github.com/openai/whisper/blob/main/LICENSE>
+
+## Use of AI assistance
+
+_Student: complete this section with the AI tools used, the tasks they assisted
+with, and how generated code or explanations were reviewed and validated._
