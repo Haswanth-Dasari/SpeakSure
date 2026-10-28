@@ -1,6 +1,6 @@
 import pytest
 
-from src.speaksure.core import (
+from legacy.core import (
     DIFFICULTIES,
     DURATIONS,
     PRACTICE_MODES,

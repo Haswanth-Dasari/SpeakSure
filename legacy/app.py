@@ -1,22 +1,28 @@
 """Streamlit dashboard and UI flow for SpeakSure practice sessions."""
 
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.speaksure.configuration import get_api_key, get_speech_to_text_provider
 
 import streamlit as st
 
-from src.speaksure.core import (
+from legacy.core import (
     DIFFICULTIES, DURATIONS, INTRODUCTORY_QUESTIONS, PRACTICE_MODES,
     add_answer, complete_session, create_session, get_default_configuration,
     get_scripted_question,
 )
-from src.speaksure.ai_provider import (
+from legacy.ai_provider import (
     MissingConfiguration, OpenAIConversationProvider, ProviderError,
 )
 from src.speaksure.speech_to_text import (
     SpeechToTextError, create_speech_to_text_provider,
 )
 
-st.set_page_config(page_title="SpeakSure", page_icon="??", layout="wide")
+st.set_page_config(page_title="SpeakSure", page_icon="🎙️", layout="wide")
 st.markdown("""<style>.block-container {max-width: 1000px; padding-top: 2.5rem;}
 [data-testid="stMetric"] {background: #f4f7fb; padding: 1rem; border-radius: 12px;}</style>""", unsafe_allow_html=True)
 st.title("?? SpeakSure")

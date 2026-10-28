@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#f3f5fb">
+    <link rel="icon" href="data:,">
+    <title>SpeakSure · Interview room</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <div id="live-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+    <main id="setup" class="setup-layout">
+      <section class="intro">
+        <div class="brand">SpeakSure</div>
+        <h1>Practise a real interview, out loud.</h1>
+        <p class="lead">An AI interviewer asks, listens and follows up. You’ll get a clear feedback report at the end.</p>
+        <ul class="tips">
+          <li><b>1</b><span>Speak naturally. The interviewer decides when you’ve finished, so there are no buttons to press.</span></li>
+          <li><b>2</b><span>Use your laptop or a wired microphone. Bluetooth headset microphones can sound muffled.</span></li>
+          <li><b>3</b><span>Listen instead of reading. Captions are off by default, like a real call.</span></li>
+        </ul>
+      </section>
+
+      <div class="setup-side">
+        <form id="setup-form" class="card" aria-label="Interview setup">
+          <label class="field">
+            Your name
+            <input id="candidate-name" class="input" autocomplete="name" maxlength="120" placeholder="Your name">
+          </label>
+
+          <label class="field">
+            Role you’re interviewing for
+            <select id="role-select" class="input">
+              <option>Software engineering fresher</option>
+              <option>Data analyst</option>
+              <option>Customer support associate</option>
+              <option>Other</option>
+            </select>
+          </label>
+          <label id="other-role-wrap" class="field hidden">
+            Your role
+            <input id="other-role" class="input" maxlength="60" placeholder="e.g. Product designer">
+          </label>
+
+          <div id="length-label" class="field-label">Length</div>
+          <div class="length-cards" role="radiogroup" aria-labelledby="length-label">
+            <label class="length-card">
+              <input type="radio" name="length" value="quick">
+              <b>Quick</b><span>3 questions · about 8 min</span>
+            </label>
+            <label class="length-card">
+              <input type="radio" name="length" value="standard" checked>
+              <b>Standard</b><span>5 questions · about 15 min</span>
+            </label>
+            <label class="length-card">
+              <input type="radio" name="length" value="full">
+              <b>Full</b><span>8 questions · about 25 min</span>
+            </label>
+          </div>
+
+          <div class="field">
+            <label for="mic-select">Microphone</label>
+            <div class="mic-row">
+              <select id="mic-select" class="input" disabled>
+                <option value="">Grant microphone access first</option>
+              </select>
+              <button id="test-mic" class="button button-ghost" type="button" disabled>Test</button>
+            </div>
+            <button id="grant-mic" class="button button-ghost grant-button" type="button">Allow microphone</button>
+          </div>
+          <div class="mic-feedback">
+            <div id="mic-meter" class="meter" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <span id="mic-verdict" class="chip" aria-live="polite">Allow access to begin</span>
+          </div>
+          <p id="bluetooth-warning" class="warning hidden" role="status">This looks like a Bluetooth headset. Its microphone may sound muffled; prefer the laptop microphone if you can.</p>
+
+          <label class="field">
+            Names or tools you may mention <span class="optional">(optional)</span>
+            <input id="vocabulary-hints" class="input" placeholder="IIITDM Kurnool, TensorFlow, Maya Patel">
+          </label>
+
+          <div class="check-row">
+            <label class="check-label">
+              <input id="content-scoring" type="checkbox" checked>
+              <span>Include AI content scoring in my report</span>
+            </label>
+            <p id="content-scoring-note" class="field-note hidden"></p>
+          </div>
+          <label class="check-label">
+            <input id="camera-preview" type="checkbox">
+            <span>Show my camera while I answer <span class="optional">(preview only; never recorded)</span></span>
+          </label>
+
+          <button id="join-room" class="button button-primary join-button" type="submit" disabled>Join the interview room</button>
+          <p id="join-wait" class="join-wait" role="status" aria-live="polite">Waiting for microphone access and models.</p>
+        </form>
+
+        <section class="recent-card" aria-labelledby="recent-heading">
+          <h2 id="recent-heading">Recent sessions</h2>
+          <div id="recent-sessions" class="recent-list">Loading your sessions…</div>
+        </section>
+      </div>
+    </main>
+
+    <main id="room" class="room hidden" data-state="idle">
+      <header class="room-top">
+        <div class="brand">SpeakSure <span class="room-role">· <span id="room-role">Interview</span></span></div>
+        <div class="progress-group">
+          <div id="question-progress" class="question-progress" role="img" aria-label="Question 1 of 5"></div>
+          <span id="question-count">Question 1 of 5</span>
+        </div>
+        <div class="timer"><span class="record-dot" aria-hidden="true"></span><span id="clock">00:00</span></div>
+      </header>
+
+      <section id="call-stage" class="stage">
+        <div class="orb" id="orb" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="speaker-label">
+          <div class="who">Interviewer</div>
+          <div id="room-status" role="status" aria-live="polite" aria-atomic="true">Ready when you are</div>
+          <p id="caption" class="caption hidden" aria-live="polite"></p>
+        </div>
+        <aside class="self-tile" aria-label="Your camera and microphone">
+          <video id="camera" class="camera-preview hidden" autoplay playsinline muted></video>
+          <div class="avatar-ring" id="avatar-ring"><div id="avatar" class="avatar">S</div></div>
+          <div id="room-meter" class="meter room-meter" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <small>You · Microphone on</small>
+        </aside>
+        <p id="timing-warning" class="timing-warning hidden" role="status"></p>
+      </section>
+
+      <section id="preparing" class="preparing hidden" aria-live="polite">
+        <div class="orb preparing-orb" aria-hidden="true"><i></i><i></i><i></i></div>
+        <h1>Preparing your feedback</h1>
+        <p id="analysis-status" role="status">Getting your interview ready…</p>
+        <div class="analysis-track"><span id="analysis-progress"></span></div>
+        <p id="analysis-elapsed" class="field-note"></p>
+        <div id="analysis-error" class="inline-error hidden" role="alert"></div>
+        <button id="retry-analysis" class="button button-ghost hidden" type="button">Retry</button>
+      </section>
+
+      <footer id="room-footer" class="room-footer">
+        <button id="captions-toggle" class="button button-toggle" type="button" aria-pressed="false">Captions off</button>
+        <button id="repeat-question" class="button button-toggle" type="button" disabled>Repeat question</button>
+        <button id="end-interview" class="button button-end" type="button">End interview</button>
+      </footer>
+    </main>
+
+    <section id="report-view" class="report-view hidden" aria-label="Interview feedback">
+      <header class="report-bar">
+        <strong>SpeakSure · Your feedback</strong>
+        <nav aria-label="Report actions">
+          <a id="open-report" class="button button-ghost" target="_blank" rel="noopener noreferrer">Open in new tab</a>
+          <a id="download-report" class="button button-ghost" download="speaksure-feedback.html">Download</a>
+          <button id="new-interview" class="button button-primary" type="button">New interview</button>
+        </nav>
+      </header>
+      <iframe id="report-frame" title="Interview feedback report" sandbox="allow-same-origin"></iframe>
+    </section>
+
+    <dialog id="end-dialog" class="end-dialog">
+      <form method="dialog">
+        <h2>End this interview?</h2>
+        <p>Your answers so far will be saved and your feedback will be prepared.</p>
+        <div class="dialog-actions">
+          <button class="button button-ghost" value="cancel">Keep going</button>
+          <button id="confirm-end" class="button button-end" value="end">End interview</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/static/js/main.js"></script>
+  </body>
+</html>

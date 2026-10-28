@@ -494,3 +494,227 @@ def test_local_diagnostic_reports_selected_and_actual_device(monkeypatch):
     assert diagnostic["device"] == "cpu"
     assert diagnostic["actual_device"] == "not-initialized"
     assert diagnostic["api_key_configured"] is False
+
+
+def test_local_detailed_transcription_maps_words_and_passes_options():
+    captured = {}
+
+    class FakeModel:
+        def transcribe(
+            self,
+            audio,
+            *,
+            beam_size,
+            word_timestamps,
+            language,
+            vad_filter,
+            hotwords,
+        ):
+            captured.update(
+                beam_size=beam_size,
+                word_timestamps=word_timestamps,
+                language=language,
+                vad_filter=vad_filter,
+                hotwords=hotwords,
+            )
+            segments = [
+                SimpleNamespace(
+                    text=" Hello world.",
+                    words=[
+                        SimpleNamespace(
+                            word=" Hello", start=0.0, end=0.4, probability=0.98
+                        ),
+                        SimpleNamespace(
+                            word=" world.", start=0.4, end=0.9, probability=0.95
+                        ),
+                    ],
+                )
+            ]
+            info = SimpleNamespace(
+                duration=1.0, language="en", language_probability=0.99
+            )
+            return iter(segments), info
+
+    provider = LocalSpeechToTextProvider(
+        LocalTranscriptionConfig(
+            model_size="base",
+            device="cpu",
+            language="en",
+            vad_filter=True,
+            hotwords="SpeakSure, speech recognition",
+        ),
+        model_loader=lambda *args: (FakeModel(), "cpu", "int8"),
+    )
+
+    result = provider.transcribe_detailed(
+        make_wav_audio(), filename="recording.wav", content_type="audio/wav"
+    )
+
+    assert result.text == "Hello world."
+    assert result.words == (
+        speech_to_text.TranscriptWord(" Hello", 0.0, 0.4, 0.98),
+        speech_to_text.TranscriptWord(" world.", 0.4, 0.9, 0.95),
+    )
+    assert result.duration_seconds == 1.0
+    assert result.language == "en"
+    assert result.language_probability == 0.99
+    assert result.device == "cpu"
+    assert captured == {
+        "beam_size": 5,
+        "word_timestamps": True,
+        "language": "en",
+        "vad_filter": True,
+        "hotwords": "SpeakSure, speech recognition",
+    }
+
+
+def test_local_transcription_joins_nonempty_segment_text_with_one_space():
+    segment_words = [
+        SimpleNamespace(word=" Hello,", start=0.0, end=0.2, probability=0.8),
+        SimpleNamespace(word=" world!", start=0.2, end=0.4, probability=0.9),
+        SimpleNamespace(word=" again.", start=0.4, end=0.6, probability=0.7),
+    ]
+
+    class FakeModel:
+        def transcribe(self, _audio, **_kwargs):
+            return iter(
+                [
+                    SimpleNamespace(text=" Hello, ", words=[segment_words[0]]),
+                    SimpleNamespace(text="   ", words=[]),
+                    SimpleNamespace(text="world!", words=[segment_words[1]]),
+                    SimpleNamespace(text="again.", words=[segment_words[2]]),
+                ]
+            ), SimpleNamespace(duration=0.6, language="en", language_probability=0.9)
+
+    provider = LocalSpeechToTextProvider(
+        LocalTranscriptionConfig(model_size="base", device="cpu"),
+        model_loader=lambda *_args: (FakeModel(), "cpu", "int8"),
+    )
+
+    result = provider.transcribe_detailed(
+        make_wav_audio(), filename="recording.wav", content_type="audio/wav"
+    )
+
+    assert result.text == "Hello, world! again."
+    assert [word.text for word in result.words] == [
+        " Hello,",
+        " world!",
+        " again.",
+    ]
+    assert [word.start for word in result.words] == [0.0, 0.2, 0.4]
+    assert [word.end for word in result.words] == [0.2, 0.4, 0.6]
+    assert [word.probability for word in result.words] == [0.8, 0.9, 0.7]
+
+
+def test_local_detailed_transcription_maps_auto_language_and_empty_hotwords():
+    captured = {}
+
+    class FakeModel:
+        def transcribe(self, audio, **kwargs):
+            captured.update(kwargs)
+            return iter([SimpleNamespace(text="Detected speech.", words=[])]), (
+                SimpleNamespace(duration=0.1, language="fr", language_probability=0.8)
+            )
+
+    provider = LocalSpeechToTextProvider(
+        LocalTranscriptionConfig(
+            model_size="base",
+            device="cpu",
+            language="auto",
+            hotwords="",
+        ),
+        model_loader=lambda *args: (FakeModel(), "cpu", "int8"),
+    )
+
+    result = provider.transcribe_detailed(
+        make_wav_audio(), filename="recording.wav", content_type="audio/wav"
+    )
+
+    assert captured["language"] is None
+    assert captured["hotwords"] is None
+    assert captured["word_timestamps"] is True
+    assert result.language == "fr"
+
+
+def test_local_transcribe_returns_detailed_transcription_text():
+    provider = LocalSpeechToTextProvider(
+        LocalTranscriptionConfig(model_size="base", device="cpu")
+    )
+    detailed_result = speech_to_text.TranscriptionResult(
+        text="Same recognized text.",
+        words=(),
+        duration_seconds=1.0,
+        language="en",
+        language_probability=0.9,
+        device="cpu",
+    )
+    provider.transcribe_detailed = lambda *args, **kwargs: detailed_result
+
+    assert provider.transcribe(
+        b"wav data", filename="recording.wav", content_type="audio/wav"
+    ) == "Same recognized text."
+
+
+def test_openai_detailed_transcription_has_no_word_timings():
+    class Client:
+        class audio:
+            class transcriptions:
+                @staticmethod
+                def create(**kwargs):
+                    return SimpleNamespace(text=" Recognized remotely. ")
+
+    provider = OpenAISpeechToTextProvider(
+        TranscriptionConfig("test-key", "whisper-1"),
+        client_factory=lambda **kwargs: Client(),
+    )
+
+    result = provider.transcribe_detailed(
+        b"wav data", filename="recording.wav", content_type="audio/wav"
+    )
+
+    assert result.text == "Recognized remotely."
+    assert result.words == ()
+    assert result.device == "remote"
+
+
+def test_local_transcription_config_reads_new_environment_settings(monkeypatch):
+    monkeypatch.setenv("SPEECH_TO_TEXT_LANGUAGE", "auto")
+    monkeypatch.setenv("SPEECH_TO_TEXT_VAD_FILTER", "false")
+    monkeypatch.setenv("SPEECH_TO_TEXT_HOTWORDS", "SpeakSure, speech, ,")
+
+    config = LocalTranscriptionConfig.from_env()
+
+    assert config.language == "auto"
+    assert config.vad_filter is False
+    assert config.hotwords == "SpeakSure, speech"
+
+
+def test_local_transcription_config_defaults_new_settings(monkeypatch):
+    for setting in (
+        "SPEECH_TO_TEXT_LANGUAGE",
+        "SPEECH_TO_TEXT_VAD_FILTER",
+        "SPEECH_TO_TEXT_HOTWORDS",
+    ):
+        monkeypatch.delenv(setting, raising=False)
+
+    config = LocalTranscriptionConfig.from_env()
+
+    assert config.language == "en"
+    assert config.vad_filter is True
+    assert config.hotwords == ""
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "message"),
+    [
+        ("SPEECH_TO_TEXT_LANGUAGE", "english-US", "language code"),
+        ("SPEECH_TO_TEXT_VAD_FILTER", "yes", "must be true or false"),
+    ],
+)
+def test_invalid_local_transcription_options_are_rejected(
+    monkeypatch, setting, value, message
+):
+    monkeypatch.setenv(setting, value)
+
+    with pytest.raises(LocalModelError, match=message):
+        LocalTranscriptionConfig.from_env()
