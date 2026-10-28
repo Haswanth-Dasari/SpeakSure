@@ -24,6 +24,7 @@ export async function createSession({
   vocabularyHints,
   inputDeviceLabel,
   constraints,
+  onDiagnostic,
 }) {
   const payload = {
     role,
@@ -41,7 +42,22 @@ export async function createSession({
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  onDiagnostic?.("session_creation_response", {
+    status: "received",
+    http_status: response.status,
+  });
+  onDiagnostic?.("session_response_body", { status: "parsing_started" });
   const data = await response.json();
+  onDiagnostic?.("session_creation_response_fields", {
+    status: "checked",
+    session_id_present: typeof data?.session_id === "string",
+    question_index_present: Number.isFinite(data?.question_index),
+    total_main_questions_present: Number.isFinite(data?.total_main_questions),
+    first_question_present: Boolean(data?.first_question && typeof data.first_question === "object"),
+    first_question_id_present: typeof data?.first_question?.id === "string",
+    first_question_text_present: typeof data?.first_question?.text === "string",
+    first_question_audio_url_present: typeof data?.first_question?.audio_url === "string",
+  });
   if (!response.ok) throw new Error(data.message || `Failed to create session (${response.status})`);
   if (!isValidSessionId(data.session_id)) throw new Error("Invalid session identifier received from server.");
   return data;

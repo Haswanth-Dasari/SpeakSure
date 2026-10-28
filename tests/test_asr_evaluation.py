@@ -72,6 +72,7 @@ def test_load_manifest_resolves_clips_and_parses_optional_fields(tmp_path):
             "input_device_id": "",
             "category": "",
             "notes": "",
+            "accept": "",
         }
     ]
 
