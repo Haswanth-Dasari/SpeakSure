@@ -99,6 +99,48 @@ const app = {
 
 const sleep = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
+const JOIN_DIAGNOSTICS_FLAG = "speaksure.joinDiagnostics";
+let joinDiagnosticAttempt = null;
+
+function joinDiagnosticsEnabled() {
+  if (!["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) return false;
+  try {
+    return window.localStorage.getItem(JOIN_DIAGNOSTICS_FLAG) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function sanitizedError(error) {
+  const errorName = typeof error?.name === "string" ? error.name.slice(0, 80) : "Error";
+  let errorMessage = typeof error?.message === "string" ? error.message : "Unknown error";
+  for (const sensitiveValue of [el.name.value.trim(), app.deviceLabel]) {
+    if (sensitiveValue) errorMessage = errorMessage.split(sensitiveValue).join("[redacted]");
+  }
+  errorMessage = errorMessage
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[email]")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "[identifier]")
+    .replace(/\b[0-9a-f]{32}\b/gi, "[identifier]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/([?&][^=\s]+)=([^&\s]+)/g, "$1=[redacted]")
+    .replace(/(["']).*?\1/g, "[quoted text]")
+    .replace(/[\r\n\t]/g, " ")
+    .slice(0, 240);
+  return { error_name: errorName, error_message: errorMessage };
+}
+
+function logJoinDiagnostic(stage, details = {}) {
+  const attempt = joinDiagnosticAttempt;
+  if (!attempt?.enabled) return;
+  attempt.currentStage = stage;
+  console.info("[SpeakSure Join diagnostic]", {
+    stage,
+    elapsed_ms: Math.round(performance.now() - attempt.startedAt),
+    ...details,
+  });
+}
+
 function setRoomState(state, message) {
   el.room.dataset.state = state;
   el.roomStatus.textContent = message;
@@ -269,13 +311,19 @@ function refreshRepeatButton() {
 }
 
 async function startCameraPreview() {
-  if (!el.cameraPreview.checked) return;
+  if (!el.cameraPreview.checked) {
+    logJoinDiagnostic("camera_initialization", { status: "skipped" });
+    return;
+  }
+  logJoinDiagnostic("camera_initialization", { status: "started" });
   try {
     app.cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     el.camera.srcObject = app.cameraStream;
     el.camera.classList.remove("hidden");
-  } catch {
+    logJoinDiagnostic("camera_initialization", { status: "completed" });
+  } catch (error) {
     app.cameraStream = null;
+    logJoinDiagnostic("camera_initialization", { status: "failed", ...sanitizedError(error) });
   }
 }
 
@@ -366,11 +414,15 @@ el.resumeAnalyze.addEventListener("click", analyseResume);
 async function joinRoom(event) {
   event.preventDefault();
   if (el.join.disabled) return;
+  joinDiagnosticAttempt = { enabled: joinDiagnosticsEnabled(), startedAt: performance.now(), currentStage: "join_submission" };
+  logJoinDiagnostic("join_submission", { status: "received" });
+  logJoinDiagnostic("audio_unlock", { status: "started" });
   const unlockPromise = app.interviewer.unlock();
   app.active = true;
   updateJoinAvailability();
   el.join.textContent = "Joining…";
   try {
+    logJoinDiagnostic("session_creation_request", { status: "started" });
     // Start the session request immediately; audio unlock is awaited afterwards
     // so a slow audio device cannot freeze the join button.
     const sessionPromise = createSession({
@@ -384,27 +436,44 @@ async function joinRoom(event) {
         .join(", ") || undefined,
       inputDeviceLabel: app.deviceLabel,
       constraints: {},
+      onDiagnostic: (stage, details) => logJoinDiagnostic(stage, details),
     });
     unlockPromise.catch(() => {});
     const session = await sessionPromise;
     await unlockPromise;
+    logJoinDiagnostic("audio_unlock", { status: "completed" });
     app.sessionId = session.session_id;
+    logJoinDiagnostic("session_id_assigned", { status: "completed", session_id_present: true });
     app.questionIndex = session.question_index;
     app.totalQuestions = session.total_main_questions;
     el.roomRole.textContent = selectedRole();
     el.avatar.textContent = initials(el.name.value);
     updateQuestionProgress();
+    logJoinDiagnostic("room_view_transition", { status: "started" });
     el.setup.classList.add("hidden");
     el.room.classList.remove("hidden");
+    logJoinDiagnostic("room_view_transition", { status: "completed" });
     app.roomStartedAt = performance.now();
     app.roomTimer = window.setInterval(() => {
       el.clock.textContent = formatTime((performance.now() - app.roomStartedAt) / 1000);
     }, 500);
     await startCameraPreview();
-    await speakInterviewerLine(session.first_question.text, session.first_question.audio_url);
+    logJoinDiagnostic("interviewer_audio_playback", { status: "started" });
+    await speakInterviewerLine(session.first_question.text, session.first_question.audio_url, (stage, details) => logJoinDiagnostic(stage, details));
+    logJoinDiagnostic("interviewer_audio_playback", { status: "completed" });
     await sleep(250);
     await startListening();
+    logJoinDiagnostic("join_handler", {
+      status: el.room.dataset.state === "error" ? "completed_with_handled_error" : "completed",
+    });
   } catch (error) {
+    const failedStage = joinDiagnosticAttempt?.currentStage;
+    if (failedStage) logJoinDiagnostic(failedStage, { status: "failed", ...sanitizedError(error) });
+    logJoinDiagnostic("join_handler", {
+      status: "caught_exception",
+      ...sanitizedError(error),
+      failed_stage: failedStage,
+    });
     if (!app.sessionId) {
       app.active = false;
       el.join.textContent = "Join the interview room";
@@ -423,15 +492,18 @@ async function joinRoom(event) {
     } else {
       setRoomState("error", error.message || "The interview could not be started.");
     }
+  } finally {
+    joinDiagnosticAttempt = null;
   }
 }
 
-async function speakInterviewerLine(text, audioUrl) {
+async function speakInterviewerLine(text, audioUrl, onDiagnostic) {
   app.currentLine = text;
   updateCaption();
+  if (app.questionIndex === 1 && !app.heardSpeech) logJoinDiagnostic("first_question_presented", { status: "presented" });
   setRoomState("speaking", "Interviewer is speaking");
   el.repeat.disabled = true;
-  await app.interviewer.playUrl(audioUrl);
+  await app.interviewer.playUrl(audioUrl, onDiagnostic);
 }
 
 async function startListening() {
@@ -444,10 +516,12 @@ async function startListening() {
   app.capture = new AudioCaptureSession();
   app.answerStartedAt = performance.now();
   setRoomState("listening", "Your turn · listening");
+  logJoinDiagnostic("first_listening_state", { status: "entered" });
   updateLevelMeter(el.roomMeter, 0);
   el.avatarRing.classList.remove("active");
   refreshRepeatButton();
   try {
+    logJoinDiagnostic("microphone_capture", { status: "started" });
     await app.capture.start(
       app.deviceId,
       (frame) => {
@@ -477,6 +551,7 @@ async function startListening() {
         el.avatarRing.style.boxShadow = `0 0 0 ${Math.min(14, level * 34)}px color-mix(in srgb, var(--teal) 30%, transparent)`;
       },
     );
+    logJoinDiagnostic("microphone_capture", { status: "completed" });
     app.hintTimer = window.setInterval(() => {
       const elapsed = (performance.now() - app.answerStartedAt) / 1000;
       if (!app.heardSpeech && elapsed >= 8 && !app.hintShown) {
@@ -486,7 +561,8 @@ async function startListening() {
         refreshRepeatButton();
       }
     }, 250);
-  } catch {
+  } catch (error) {
+    logJoinDiagnostic("microphone_capture", { status: "failed", ...sanitizedError(error) });
     releaseCapture();
     setRoomState("error", "Microphone access ended. Allow microphone access and try again.");
   }

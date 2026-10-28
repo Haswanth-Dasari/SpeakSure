@@ -35,13 +35,26 @@ export class InterviewerAudioPlayer {
     }
   }
 
-  async playUrl(url) {
+  async playUrl(url, onDiagnostic) {
+    onDiagnostic?.("interviewer_audio_unlock", { status: "started" });
     await this.unlock();
+    onDiagnostic?.("interviewer_audio_unlock", { status: "completed" });
+    onDiagnostic?.("interviewer_audio_fetch", { status: "started" });
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`Interviewer audio failed to load (${response.status}).`);
+    if (!response.ok) {
+      onDiagnostic?.("interviewer_audio_fetch", { status: "failed", http_status: response.status });
+      throw new Error(`Interviewer audio failed to load (${response.status}).`);
+    }
+    onDiagnostic?.("interviewer_audio_fetch", { status: "completed", http_status: response.status });
+    onDiagnostic?.("interviewer_audio_response_body", { status: "reading_started" });
     const bytes = await response.arrayBuffer();
+    onDiagnostic?.("interviewer_audio_response_body", { status: "read_completed" });
+    onDiagnostic?.("interviewer_audio_decode", { status: "started" });
     this.lastBuffer = await this.context.decodeAudioData(bytes);
+    onDiagnostic?.("interviewer_audio_decode", { status: "completed" });
+    onDiagnostic?.("interviewer_audio_playback", { status: "audio_started" });
     await this.playBuffer(this.lastBuffer);
+    onDiagnostic?.("interviewer_audio_playback", { status: "audio_ended" });
   }
 
   async replay() {
