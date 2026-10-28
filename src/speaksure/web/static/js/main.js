@@ -300,8 +300,9 @@ async function joinRoom(event) {
   updateJoinAvailability();
   el.join.textContent = "Joining…";
   try {
-    await unlockPromise;
-    const session = await createSession({
+    // Start the session request immediately; audio unlock is awaited afterwards
+    // so a slow audio device cannot freeze the join button.
+    const sessionPromise = createSession({
       role: selectedRole(),
       length: selectedLength(),
       candidateName: el.name.value,
@@ -309,11 +310,14 @@ async function joinRoom(event) {
       inputDeviceLabel: app.deviceLabel,
       constraints: {},
     });
+    unlockPromise.catch(() => {});
+    const session = await sessionPromise;
+    await unlockPromise;
     app.sessionId = session.session_id;
     app.questionIndex = session.question_index;
     app.totalQuestions = session.total_main_questions;
-    app.roomRole.textContent = selectedRole();
-    app.avatar.textContent = initials(el.name.value);
+    el.roomRole.textContent = selectedRole();
+    el.avatar.textContent = initials(el.name.value);
     updateQuestionProgress();
     el.setup.classList.add("hidden");
     el.room.classList.remove("hidden");
@@ -327,6 +331,15 @@ async function joinRoom(event) {
     await startListening();
   } catch (error) {
     if (!app.sessionId) {
+      app.active = false;
+      el.join.textContent = "Join the interview room";
+      updateJoinAvailability();
+      el.joinWait.textContent = error.message || "The interview could not be started.";
+      announce(el.liveAnnouncer, el.joinWait.textContent);
+    } else if (el.room.classList.contains("hidden")) {
+      // Failed after the session was created but before the room was shown:
+      // the room's status line is invisible, so report on the setup screen.
+      app.sessionId = null;
       app.active = false;
       el.join.textContent = "Join the interview room";
       updateJoinAvailability();

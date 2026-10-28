@@ -36,11 +36,24 @@ export async function createSession({
   };
   if (vocabularyHints) payload.vocabulary_hints = vocabularyHints;
 
-  const response = await fetch("/api/sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 60000);
+  let response;
+  try {
+    response = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("The server did not respond within 60 seconds. Check the server window for errors.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
   const data = await response.json();
   if (!response.ok) throw new Error(data.message || `Failed to create session (${response.status})`);
   if (!isValidSessionId(data.session_id)) throw new Error("Invalid session identifier received from server.");

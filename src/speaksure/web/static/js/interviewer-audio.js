@@ -1,3 +1,11 @@
+function withTimeout(promise, milliseconds, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error(message)), milliseconds);
+  });
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
+}
+
 export class InterviewerAudioPlayer {
   constructor() {
     this.context = null;
@@ -17,7 +25,14 @@ export class InterviewerAudioPlayer {
       this.analyser.connect(this.context.destination);
       this.levelSamples = new Float32Array(this.analyser.fftSize);
     }
-    if (this.context.state === "suspended") await this.context.resume();
+    if (this.context.state === "suspended") {
+      await withTimeout(
+        this.context.resume(),
+        6000,
+        "Audio output did not start. Check your Windows sound output device " +
+          "(a Bluetooth headset in hands-free mode can block it), then try again.",
+      );
+    }
   }
 
   async playUrl(url) {
@@ -38,11 +53,14 @@ export class InterviewerAudioPlayer {
   playBuffer(buffer) {
     this.stop();
     return new Promise((resolve) => {
+      // Safety net: never wait forever if the browser drops the "ended" event.
+      const safety = window.setTimeout(resolve, (buffer.duration + 5) * 1000);
       const source = this.context.createBufferSource();
       this.currentSource = source;
       source.buffer = buffer;
       source.connect(this.analyser);
       source.addEventListener("ended", () => {
+        window.clearTimeout(safety);
         if (this.currentSource === source) this.currentSource = null;
         resolve();
       }, { once: true });

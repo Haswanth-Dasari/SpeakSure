@@ -364,6 +364,7 @@ def create_app(
         if payload.vocabulary_hints:
             metadata["vocabulary_hints"] = payload.vocabulary_hints
         session = create_session_record(question_count, metadata)
+        LOGGER.info("Creating session %s: synthesizing opening line.", session.session_id)
         try:
             _cache_spoken_line(
                 active_services,
@@ -376,6 +377,7 @@ def create_app(
             return _error_response(
                 502, "tts_failed", "The opening interviewer audio could not be generated."
             )
+        LOGGER.info("Session %s: opening audio ready.", session.session_id)
         session_path = active_services.sessions_dir / f"session_{session.session_id}.json"
         session.save_to(session_path)
         entry = WebSession(
