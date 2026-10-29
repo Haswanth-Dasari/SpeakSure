@@ -91,7 +91,10 @@ def render_report(
         _metadata_item("Questions", question_count),
         _metadata_item("Session", session_id[:8] or "Unknown"),
         _metadata_item("STT model", _model_value(metadata.get("stt_model"))),
-        _metadata_item("LLM model", _model_value(metadata.get("llm_model"))),
+        _metadata_item(
+            "LLM model",
+            _model_value(metadata.get("llm_model") or _content_model(groups)),
+        ),
         _metadata_item(
             "TTS model",
             _model_value(metadata.get("tts_model", metadata.get("tts_voice"))),
@@ -621,6 +624,15 @@ def _rating(value: object) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
     return "-"
+
+
+def _content_model(groups: Any) -> str | None:
+    """Return the model name recorded by the first rated content result, if any."""
+    if isinstance(groups, list):
+        for group in groups:
+            if isinstance(group, Mapping) and isinstance(group.get("model"), str):
+                return group["model"] or None
+    return None
 
 
 def _content_band(score: float | None) -> str:

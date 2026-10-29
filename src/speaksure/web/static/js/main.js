@@ -306,7 +306,10 @@ async function joinRoom(event) {
       role: selectedRole(),
       length: selectedLength(),
       candidateName: el.name.value,
-      vocabularyHints: el.hints.value.trim() || undefined,
+      // The candidate's own name is a likely mis-heard word, so add it as a hint.
+      vocabularyHints: [el.name.value.trim().slice(0, 40), el.hints.value.trim()]
+        .filter(Boolean)
+        .join(", ") || undefined,
       inputDeviceLabel: app.deviceLabel,
       constraints: {},
     });

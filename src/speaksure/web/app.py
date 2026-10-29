@@ -549,6 +549,10 @@ def create_app(
             timing = turn.analysis.setdefault("timing", {})
             timing["upload_s"] = upload_ms / 1000
             timing["end_wait_s"] = end_wait_ms / 1000
+            # The browser measures the time from the end of the question to the
+            # first spoken word. That is the thinking time; 0 means no speech.
+            if end_wait_ms > 0:
+                turn.thinking_time_seconds = end_wait_ms / 1000
             entry.session.save_to(entry.session_path)
         return JSONResponse({"status": "ok"})
 

@@ -31,6 +31,68 @@ _MASS_NOUNS = frozenset(
         "traffic",
         "water",
         "work",
+        # Abstract nouns that are normally used without an article in
+        # interview answers ("I handle pressure", "I have experience").
+        "accountability",
+        "adaptability",
+        "anxiety",
+        "attention",
+        "code",
+        "collaboration",
+        "commitment",
+        "communication",
+        "confidence",
+        "consistency",
+        "creativity",
+        "curiosity",
+        "data",
+        "debugging",
+        "dedication",
+        "development",
+        "discipline",
+        "education",
+        "effort",
+        "empathy",
+        "energy",
+        "engineering",
+        "enthusiasm",
+        "experience",
+        "flexibility",
+        "focus",
+        "growth",
+        "guidance",
+        "hardware",
+        "help",
+        "honesty",
+        "integrity",
+        "intelligence",
+        "interest",
+        "leadership",
+        "learning",
+        "management",
+        "mentorship",
+        "money",
+        "motivation",
+        "networking",
+        "ownership",
+        "passion",
+        "patience",
+        "persistence",
+        "planning",
+        "practice",
+        "pressure",
+        "programming",
+        "progress",
+        "resilience",
+        "science",
+        "stress",
+        "success",
+        "support",
+        "teamwork",
+        "technology",
+        "testing",
+        "time",
+        "training",
     }
 )
 _PAST_TIME_WORDS = frozenset(
@@ -345,6 +407,13 @@ def _find_issues(
         if noun.lemma_.casefold() in _MASS_NOUNS:
             continue
         if noun.dep_ == "pobj" and noun.head.text.casefold() == "during":
+            continue
+        # Fixed phrases: "for example", "for instance" are correct as spoken.
+        if (
+            noun.lemma_.casefold() in {"example", "instance"}
+            and noun.dep_ == "pobj"
+            and noun.head.text.casefold() == "for"
+        ):
             continue
         if noun.dep_ not in {
             "attr",

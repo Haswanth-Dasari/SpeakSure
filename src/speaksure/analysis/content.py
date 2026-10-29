@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import time
@@ -134,6 +135,64 @@ def parse_content_result(
     if not isinstance(parsed["reason"], str):
         raise ValueError("reason must be a string.")
     return parsed
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def repair_content_json(
+    raw_text: str, hints: Sequence[str], behavioural: bool
+) -> str:
+    """Fix harmless formatting slips in a model reply before strict validation.
+
+    Only presentation problems are repaired: extra keys, reworded hint labels,
+    over-long evidence quotes, evidence on uncovered hints, integral floats and
+    over-long advice lists. Scores, coverage decisions and quotes are never
+    invented, and quoted evidence is still verified against the transcript.
+    Anything else is returned unchanged so the strict parser rejects it.
+    """
+    text = raw_text.strip()
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fence is not None:
+        text = fence.group(1)
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return raw_text
+    if not isinstance(parsed, dict):
+        return raw_text
+    if not behavioural:
+        parsed.setdefault("star", None)
+    if not _RESULT_KEYS <= parsed.keys():
+        return raw_text
+    parsed = {key: parsed[key] for key in _RESULT_KEYS}
+    for key in ("relevance", "specificity", "clarity"):
+        value = parsed[key]
+        if isinstance(value, float) and value.is_integer():
+            parsed[key] = int(value)
+        elif isinstance(value, str) and value.strip().isdigit():
+            parsed[key] = int(value.strip())
+    coverage = parsed["coverage"]
+    if isinstance(coverage, list) and len(coverage) == len(hints):
+        fixed = []
+        for hint, entry in zip(hints, coverage):
+            if not isinstance(entry, dict) or not {"covered", "evidence"} <= entry.keys():
+                return raw_text
+            evidence = entry["evidence"] if isinstance(entry["evidence"], str) else ""
+            covered = entry["covered"]
+            if not covered:
+                evidence = ""
+            words = evidence.split()
+            if len(words) > MAX_EVIDENCE_WORDS:
+                evidence = " ".join(words[:MAX_EVIDENCE_WORDS])
+            fixed.append({"hint": hint, "covered": covered, "evidence": evidence})
+        parsed["coverage"] = fixed
+    for key in ("strengths", "improvements"):
+        if isinstance(parsed[key], list):
+            parsed[key] = parsed[key][:2]
+    if not behavioural:
+        parsed["star"] = None
+    return json.dumps(parsed)
 
 
 def verify_evidence(evidence: str, answer_text: str) -> bool:
@@ -322,10 +381,20 @@ def analyze_content(
             )
         try:
             parsed = parse_content_result(
-                response.text, question.rubric_hints, behavioural
+                repair_content_json(
+                    response.text, question.rubric_hints, behavioural
+                ),
+                question.rubric_hints,
+                behavioural,
             )
-        except ValueError:
+        except ValueError as error:
             last_category = "invalid_output"
+            LOGGER.warning(
+                "Content rating rejected for question %s (attempt %d): %s",
+                question.id,
+                attempt,
+                error,
+            )
             if invalid_retries < CONTENT_RETRIES:
                 invalid_retries += 1
                 continue
