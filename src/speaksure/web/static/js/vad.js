@@ -8,6 +8,11 @@ export const MIN_SPEECH_DURATION_SEC = 0.5;
 export const NOISE_CALIBRATION_SEC = 0.4;
 export const MAX_RECORDING_SEC = 120.0;
 export const NO_SPEECH_TIMEOUT_SEC = 15.0;
+// Frames louder than this during calibration are treated as speech, not room
+// noise, and the threshold never exceeds MAX_THRESHOLD. Without this, someone
+// who starts talking at once would raise the noise floor above their own voice.
+export const MAX_NOISE_RMS = 0.04;
+export const MAX_THRESHOLD = 0.05;
 
 // Mic test RMS threshold constants
 export const RMS_TOO_QUIET_THRESHOLD = 0.01;
@@ -53,6 +58,11 @@ export class VadDetector {
     this.threshold = 0.015;
 
     this.speechDetected = false;
+    // Time (seconds from the first frame) at which the speech that was later
+    // confirmed began. Null until speechDetected becomes true.
+    this.speechOnsetSec = null;
+    this.candidateOnsetSec = null;
+    this.quietSamplesBeforeSpeech = 0;
     this.totalSpeechSamples = 0;
     this.silenceSamplesAfterSpeech = 0;
     this.isCalibrated = false;
@@ -84,12 +94,14 @@ export class VadDetector {
 
     // Adaptive noise floor estimation during first 0.4 s
     if (currentSec < this.noiseCalibrationDuration) {
-      for (let i = 0; i < frameLen; i++) {
-        this.noiseSumSq += frame[i] * frame[i];
+      if (frameRms <= MAX_NOISE_RMS) {
+        for (let i = 0; i < frameLen; i++) {
+          this.noiseSumSq += frame[i] * frame[i];
+        }
+        this.noiseSamples += frameLen;
+        this.noiseRms = Math.sqrt(this.noiseSumSq / this.noiseSamples);
+        this.threshold = Math.min(MAX_THRESHOLD, Math.max(0.015, this.noiseRms * 2.5));
       }
-      this.noiseSamples += frameLen;
-      this.noiseRms = Math.sqrt(this.noiseSumSq / this.noiseSamples);
-      this.threshold = Math.max(0.015, this.noiseRms * 2.5);
     } else {
       this.isCalibrated = true;
     }
@@ -113,12 +125,24 @@ export class VadDetector {
     const isSpeechFrame = frameRms > this.threshold;
 
     if (isSpeechFrame) {
+      if (!this.speechDetected && this.candidateOnsetSec === null) {
+        this.candidateOnsetSec = currentSec;
+      }
+      this.quietSamplesBeforeSpeech = 0;
       this.totalSpeechSamples += frameLen;
       this.silenceSamplesAfterSpeech = 0;
       if (this.totalSpeechSamples / this.sampleRate >= this.minSpeechDuration) {
+        if (!this.speechDetected) this.speechOnsetSec = this.candidateOnsetSec ?? currentSec;
         this.speechDetected = true;
       }
     } else {
+      if (!this.speechDetected) {
+        // A short click or breath must not count as the start of the answer.
+        this.quietSamplesBeforeSpeech += frameLen;
+        if (this.quietSamplesBeforeSpeech / this.sampleRate > 0.6) {
+          this.candidateOnsetSec = null;
+        }
+      }
       if (this.speechDetected) {
         this.silenceSamplesAfterSpeech += frameLen;
         const silenceSec = this.silenceSamplesAfterSpeech / this.sampleRate;

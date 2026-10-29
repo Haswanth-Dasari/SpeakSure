@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -12,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import uvicorn
 
+from speaksure.configuration import get_report_stt_model
 from speaksure.speech_to_text import (
     LocalTranscriptionConfig,
     describe_stt_configuration,
@@ -46,6 +48,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "WARNING: remote binding exposes the local interview API to other machines."
         )
 
+    # Median of three ratings per question unless the .env says otherwise.
+    os.environ.setdefault("CONTENT_RATING_SAMPLES", "3")
     stt_config = LocalTranscriptionConfig.from_env()
     description = describe_stt_configuration(stt_config)
     tts_config = SpeechSynthesisConfig.from_env()
@@ -55,6 +59,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"device={description['device_setting']}"
     )
     print(f"TTS voice: {tts_config.voice_name}")
+    print(f"Report transcription pass: {get_report_stt_model()}")
     uvicorn.run(create_app(), host=args.host, port=args.port)
     return 0
 

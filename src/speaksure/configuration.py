@@ -100,6 +100,11 @@ def get_local_model_size() -> str:
     return os.environ.get("SPEECH_TO_TEXT_MODEL_SIZE", "").strip().lower() or "base"
 
 
+def get_report_stt_model() -> str:
+    """Return the model for the post-interview report pass ('off' disables it)."""
+    return os.environ.get("REPORT_SPEECH_TO_TEXT_MODEL", "").strip().lower() or "large-v3"
+
+
 def get_local_device() -> str:
     """Return the preferred local inference device."""
     return os.environ.get("SPEECH_TO_TEXT_DEVICE", "").strip().lower() or "auto"

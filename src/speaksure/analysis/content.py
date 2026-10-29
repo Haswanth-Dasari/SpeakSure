@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 import time
@@ -261,6 +262,39 @@ def score_content(parsed: dict[str, Any], answer_text: str) -> dict[str, Any]:
     return scored
 
 
+MAX_RATING_SAMPLES = 5
+
+
+def get_rating_samples() -> int:
+    """Return how many independent ratings to take per question (default 1)."""
+    raw = os.environ.get("CONTENT_RATING_SAMPLES", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    return min(MAX_RATING_SAMPLES, max(1, value))
+
+
+def select_median_result(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Return the median-scored rated result, annotated with the score spread.
+
+    Language-model ratings differ between runs even at temperature zero, so the
+    result whose score is the median is shown (keeping its quotes and advice
+    consistent with its own scores) together with every sample score.
+    """
+    rated = [item for item in results if item.get("rated") is True]
+    if not rated:
+        return results[-1]
+    ordered = sorted(rated, key=lambda item: float(item.get("content_score", 0.0)))
+    chosen = dict(ordered[len(ordered) // 2])
+    scores = [round(float(item.get("content_score", 0.0)), 1) for item in ordered]
+    chosen["content_score_samples"] = scores
+    chosen["content_score_spread"] = round(scores[-1] - scores[0], 1)
+    if "attempts" in chosen:
+        chosen["attempts"] = sum(int(item.get("attempts", 0)) for item in results)
+    return chosen
+
+
 def analyze_content(
     turns: Sequence[Turn],
     main_question_id: str | None,
@@ -273,7 +307,42 @@ def analyze_content(
     sleep: Callable[[float], None] = time.sleep,
     include_attempts: bool = False,
 ) -> dict[str, Any]:
-    """Rate a question group with safe retries and optional attempt metadata."""
+    """Rate a question group, taking the median of CONTENT_RATING_SAMPLES ratings."""
+    samples = get_rating_samples()
+    kwargs: dict[str, Any] = {
+        "asr_mean_probability": asr_mean_probability,
+        "asr_reliability": asr_reliability,
+        "sleep": sleep,
+        "include_attempts": include_attempts,
+    }
+    first = _analyze_content_once(
+        turns, main_question_id, bank_by_id, role, llm, **kwargs
+    )
+    if samples <= 1 or first.get("rated") is not True:
+        return first
+    results = [first]
+    for _ in range(samples - 1):
+        results.append(
+            _analyze_content_once(
+                turns, main_question_id, bank_by_id, role, llm, **kwargs
+            )
+        )
+    return select_median_result(results)
+
+
+def _analyze_content_once(
+    turns: Sequence[Turn],
+    main_question_id: str | None,
+    bank_by_id: Mapping[str, BankQuestion],
+    role: str,
+    llm: LLMClient,
+    *,
+    asr_mean_probability: float | None,
+    asr_reliability: str,
+    sleep: Callable[[float], None] = time.sleep,
+    include_attempts: bool = False,
+) -> dict[str, Any]:
+    """Rate a question group once with safe retries and optional attempt metadata."""
 
     def result_with_attempts(result: dict[str, Any], attempts: int) -> dict[str, Any]:
         """Attach attempt counts for session groups when explicitly requested."""

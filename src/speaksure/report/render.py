@@ -90,7 +90,7 @@ def render_report(
         _metadata_item("Role", role),
         _metadata_item("Questions", question_count),
         _metadata_item("Session", session_id[:8] or "Unknown"),
-        _metadata_item("STT model", _model_value(metadata.get("stt_model"))),
+        _metadata_item("STT model", _stt_model_label(metadata)),
         _metadata_item(
             "LLM model",
             _model_value(metadata.get("llm_model") or _content_model(groups)),
@@ -253,6 +253,12 @@ def _render_group(
                 if not isinstance(session_analysis.get("content_runs"), list)
                 else ""
             )
+            sample_scores = group.get("content_score_samples")
+            if isinstance(sample_scores, list) and sample_scores:
+                shown = ", ".join(_format_number(_number(item)) for item in sample_scores)
+                variation_text = (
+                    f"Median of {len(sample_scores)} ratings (scores: {shown})."
+                )
             html_parts.append(
                 f"<p>Content score: {_format_number(score)} / 100 "
                 f"(<strong>{_content_band(score)}</strong>)"
@@ -624,6 +630,15 @@ def _rating(value: object) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
     return "-"
+
+
+def _stt_model_label(metadata: Mapping[str, Any]) -> str:
+    """Describe the live model and, when used, the larger report-pass model."""
+    live = _model_value(metadata.get("stt_model"))
+    report = metadata.get("report_stt_model")
+    if isinstance(report, str) and report and report != metadata.get("stt_model"):
+        return f"{live} (live), {_as_text(report)} (this report)"
+    return live
 
 
 def _content_model(groups: Any) -> str | None:

@@ -355,6 +355,45 @@ def _cached_local_model(
         ) from None
 
 
+@lru_cache(maxsize=1)
+def _cached_report_model(
+    model_size: str, device_preference: str
+) -> tuple[WhisperModelLike, str, str]:
+    """Load the larger report-pass model so it fits next to the live model.
+
+    The live model already occupies part of a small GPU, so the report model is
+    loaded as int8_float16 (about half the memory of float16, with negligible
+    accuracy loss). Unlike the live loader there is no silent CPU fallback: if the
+    GPU load fails the report simply keeps the live transcripts.
+    """
+    _configure_windows_cuda_dlls()
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise LocalModelError(
+            "Local speech recognition is not installed."
+        ) from None
+    device = resolve_local_device(device_preference)
+    if device == "cpu":
+        return WhisperModel(model_size, device="cpu", compute_type="int8"), "cpu", "int8"
+    try:
+        model = WhisperModel(model_size, device="cuda", compute_type="int8_float16")
+    except Exception:
+        raise LocalModelError(
+            "The report speech model could not be loaded on the GPU, probably "
+            "because there is not enough video memory next to the live model."
+        ) from None
+    return model, "cuda", "int8_float16"
+
+
+def load_report_model(
+    model_size: str, device_preference: str
+) -> tuple[WhisperModelLike, str, str]:
+    """Thread-safe loader used by the report-pass transcription provider."""
+    with _MODEL_LOAD_LOCK:
+        return _cached_report_model(model_size, device_preference)
+
+
 _LOADED_LOCAL_DEVICES: dict[tuple[str, str], str] = {}
 # lru_cache does not stop two threads loading the same model at once (for
 # example the web warm-up thread and the first request). On a 6 GB GPU a double

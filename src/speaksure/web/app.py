@@ -12,7 +12,7 @@ import wave
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
@@ -43,6 +43,7 @@ from ..speech_to_text import (
     SpeechToTextProvider,
     TranscriptionResult,
     describe_stt_configuration,
+    load_report_model,
 )
 from ..text_to_speech import (
     SpeechSynthesisConfig,
@@ -51,7 +52,9 @@ from ..text_to_speech import (
 )
 from ..analysis.session_analysis import analyze_session
 from ..analysis.grammar import _load_pipeline
+from ..configuration import get_report_stt_model
 from ..report import render_report
+from ..retranscribe import retranscribe_session
 from .sessions import (
     WebSession,
     WebSessionRegistry,
@@ -130,6 +133,9 @@ class WebServices:
     llm_configured: bool
     analysis_llm_factory: Callable[[], object] | None = None
     warmup_functions: dict[str, Callable[[], object]] | None = None
+    report_stt_provider_factory: Callable[[], SpeechToTextProvider] | None = None
+    report_stt_model: str = ""
+    live_stt_model: str = ""
 
 
 class ClientInfo(BaseModel):
@@ -611,7 +617,22 @@ def _default_services(settings: WebSettings) -> WebServices:
         if callable(warmup):
             warmup()
 
+    live_model = settings.stt_config.model_size
+    report_model = get_report_stt_model()
+    report_factory: Callable[[], SpeechToTextProvider] | None = None
+    if report_model in {"base", "small", "medium", "large-v3"} and report_model != live_model:
+        report_config = replace(settings.stt_config, model_size=report_model)
+
+        def report_factory() -> SpeechToTextProvider:
+            """Build the provider for the slower, more accurate report pass."""
+            return LocalSpeechToTextProvider(
+                report_config, model_loader=load_report_model
+            )
+
     return WebServices(
+        report_stt_provider_factory=report_factory,
+        report_stt_model=report_model,
+        live_stt_model=live_model,
         stt_provider=stt_provider,
         tts_provider=tts_provider,
         interviewer_factory=interviewer_factory,
@@ -1010,8 +1031,30 @@ def _run_analysis(
                 entry.progress = min(1.0, max(0.0, float(progress)))
                 entry.message = f"Preparing feedback: {stage}."
 
+        session_for_analysis = entry.session
+        if services.report_stt_provider_factory is not None:
+            try:
+                update_progress("transcribing", 0.0)
+                session_for_analysis = retranscribe_session(
+                    entry.session,
+                    services.report_stt_provider_factory(),
+                    report_model=services.report_stt_model,
+                    live_model=services.live_stt_model,
+                    hotwords=_combine_hotwords(
+                        getattr(settings.stt_config, "hotwords", ""),
+                        entry.session.metadata.get("vocabulary_hints"),
+                    ),
+                    audio_root=Path("."),
+                    progress_callback=update_progress,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Report transcription pass failed; using live transcripts."
+                )
+                session_for_analysis = entry.session
+
         analyzed = services.analysis_function(
-            entry.session,
+            session_for_analysis,
             audio_root=Path("."),
             llm=analysis_llm,
             role=role,

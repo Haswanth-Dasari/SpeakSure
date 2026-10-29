@@ -384,9 +384,14 @@ async function startListening() {
         const contextRate = app.capture?.audioContext?.sampleRate;
         if (contextRate && app.vad.sampleRate !== contextRate) app.vad.sampleRate = contextRate;
         const result = app.vad.processFrame(frame);
+        // Thinking time = first delivered audio frame to the start of speech that
+        // the detector later confirmed (not the first noisy frame, and not the
+        // time the microphone took to open).
+        if (app.vad.speechDetected && app.endWaitMs === 0 && app.vad.speechOnsetSec !== null) {
+          app.endWaitMs = Math.max(1, app.vad.speechOnsetSec * 1000);
+        }
         if (result.isSpeech && app.firstSpeechAt === null) {
           app.firstSpeechAt = performance.now();
-          app.endWaitMs = app.firstSpeechAt - app.answerStartedAt;
           app.heardSpeech = true;
           el.avatarRing.classList.add("active");
           el.repeat.classList.remove("repeat-hint");

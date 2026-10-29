@@ -190,3 +190,34 @@ test("VAD: call-room no-speech timeout allows a silent upload at 20s", () => {
   assert.equal(stopReason, "timeout");
   assert.equal(frameCount * frameDurationSec, 20.0);
 });
+
+test("VAD: speechOnsetSec marks real speech, ignoring an early click", () => {
+  const sampleRate = 16000;
+  const frameSamples = 800; // 50 ms
+  const vad = new VadDetector(sampleRate);
+  const silence = new Float32Array(frameSamples);
+  const speech = new Float32Array(frameSamples);
+  for (let i = 0; i < frameSamples; i++) speech[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / sampleRate);
+
+  for (let f = 0; f < 8; f++) vad.processFrame(silence); // 0.4 s calibration
+  vad.processFrame(speech); // a 50 ms click at 0.40 s
+  for (let f = 0; f < 20; f++) vad.processFrame(silence); // 1.0 s of quiet
+  assert.equal(vad.speechOnsetSec, null, "a click must not confirm speech");
+  for (let f = 0; f < 20; f++) vad.processFrame(speech); // real speech from 1.45 s
+  assert.equal(vad.speechDetected, true);
+  assert.ok(
+    Math.abs(vad.speechOnsetSec - 1.45) < 0.06,
+    `onset should be about 1.45 s, got ${vad.speechOnsetSec}`
+  );
+});
+
+test("VAD: immediate speech gives an onset close to zero", () => {
+  const sampleRate = 16000;
+  const frameSamples = 800;
+  const vad = new VadDetector(sampleRate);
+  const speech = new Float32Array(frameSamples);
+  for (let i = 0; i < frameSamples; i++) speech[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / sampleRate);
+  for (let f = 0; f < 20; f++) vad.processFrame(speech);
+  assert.equal(vad.speechDetected, true);
+  assert.ok(vad.speechOnsetSec < 0.06);
+});
