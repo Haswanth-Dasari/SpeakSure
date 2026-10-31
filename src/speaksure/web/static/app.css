@@ -235,3 +235,10 @@ h1 { margin: 0.45rem 0 1rem; font-size: clamp(2rem, 4.4vw, 3.1rem); line-height:
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+.resume-field { gap: 8px; }
+.resume-row { display: flex; gap: 8px; align-items: center; }
+.resume-row .input { flex: 1 1 auto; min-width: 0; }
+.resume-review { display: grid; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.resume-review summary { cursor: pointer; font-weight: 650; color: var(--ink); }
+.resume-review textarea { resize: vertical; font: inherit; }

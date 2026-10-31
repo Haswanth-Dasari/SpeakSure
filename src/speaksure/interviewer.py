@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .interviewer_prompts import (
+    DENIAL_NOTE,
+    STYLE_NOTES,
     CLOSING_TEXT,
     FALLBACK_ACK,
     OPENING_TEMPLATE,
@@ -28,6 +30,34 @@ RECENT_EXCHANGES_LIMIT = 3
 EARLIER_ANSWER_WORD_LIMIT = 60
 
 
+_DENIAL_PATTERN = re.compile(
+    r"\b(?:no|not any|never|none|nothing|haven't|have not|hadn't|didn't|did not|"
+    r"don't|do not|can't think|cannot think)\b[^.?!]{0,50}\b(?:disagreements?|"
+    r"conflicts?|arguments?|mistakes?|problems?|issues?|challenges?|difficult\w*|"
+    r"weakness(?:es)?|failures?|struggles?|experience|time)\b",
+    re.IGNORECASE,
+)
+_SHORT_NO_PATTERN = re.compile(r"^\s*(?:no|nope|not really|never)\b", re.IGNORECASE)
+_PRESUPPOSING_PATTERN = re.compile(
+    r"\bhow did you (?:resolve|solve|handle|overcome|deal with|fix|get past|work through)\b"
+    r"|\bthose (?:disagreements?|conflicts?|problems?|issues?|challenges?|mistakes?)\b"
+    r"|\bwhat did you learn from (?:that|those|it)\b",
+    re.IGNORECASE,
+)
+
+
+def answer_denies_experience(answer: str) -> bool:
+    """Return whether the answer says the asked-about situation did not happen."""
+    if _DENIAL_PATTERN.search(answer):
+        return True
+    return len(answer.split()) <= 8 and bool(_SHORT_NO_PATTERN.match(answer))
+
+
+def follow_up_presupposes(utterance: str) -> bool:
+    """Return whether a follow-up assumes a situation the candidate has just denied."""
+    return bool(_PRESUPPOSING_PATTERN.search(utterance))
+
+
 @dataclass(frozen=True)
 class InterviewPlan:
     """A fixed ordered set of interview questions and interviewer settings."""
@@ -36,6 +66,14 @@ class InterviewPlan:
     role: str = "software engineering fresher"
     candidate_name: str = ""
     max_followups_per_question: int = 1
+    # Short summary of the candidate's resume, used only to make follow-ups specific.
+    background: str = ""
+    # When true, the final planned question may also receive a follow-up.
+    followup_on_last_question: bool = False
+    # When true, extra style guidance and the "do not presuppose" guard are applied.
+    natural_style: bool = False
+    # Follow-up limit for resume project questions (a real interviewer digs deeper there).
+    deep_dive_followups: int = 1
 
     def __post_init__(self) -> None:
         """Validate that the plan has questions and a supported follow-up limit."""
@@ -43,6 +81,8 @@ class InterviewPlan:
             raise ValueError("An interview plan must include at least one question.")
         if self.max_followups_per_question not in {0, 1, 2}:
             raise ValueError("max_followups_per_question must be 0, 1, or 2.")
+        if self.deep_dive_followups not in {0, 1, 2}:
+            raise ValueError("deep_dive_followups must be 0, 1, or 2.")
 
 
 @dataclass(frozen=True)
@@ -162,6 +202,11 @@ class Interviewer:
             )
 
         if self._question_index == len(self._plan.questions) - 1:
+            if (
+                self._plan.followup_on_last_question
+                and self._followups_used < self._followup_limit(current_question)
+            ):
+                return self._decide_after_last_question(current_question, answer)
             self._record_completed_exchange(answer)
             self._finished = True
             return InterviewerTurn(
@@ -187,7 +232,19 @@ class Interviewer:
             )
 
         action, utterance, rationale = decision
-        if action == "follow_up" and self._followups_used >= self._plan.max_followups_per_question:
+        if (
+            action == "follow_up"
+            and self._plan.natural_style
+            and answer_denies_experience(answer)
+            and follow_up_presupposes(utterance)
+        ):
+            return self._move_to_next_question(
+                next_question,
+                rationale="The follow-up assumed something the candidate said did not happen.",
+                latency=result,
+                fallback_reason=None,
+            )
+        if action == "follow_up" and self._followups_used >= self._followup_limit(current_question):
             return self._move_to_next_question(
                 next_question,
                 rationale="The follow-up limit was reached.",
@@ -222,6 +279,51 @@ class Interviewer:
             fallback_reason=None,
         )
 
+    def _followup_limit(self, question: BankQuestion) -> int:
+        """Return how many follow-ups this question may receive."""
+        if question.id.startswith("resume_project"):
+            return max(self._plan.max_followups_per_question, self._plan.deep_dive_followups)
+        return self._plan.max_followups_per_question
+
+    def _decide_after_last_question(
+        self, current_question: BankQuestion, answer: str
+    ) -> InterviewerTurn:
+        """Ask one last follow-up if the model finds a worthwhile gap, else close."""
+        final_marker = BankQuestion(
+            "closing",
+            "closing",
+            "None. That was the final question. Choose next_question only if no "
+            "follow-up is needed, and keep the utterance to a short thank-you.",
+            (),
+        )
+        messages = self._make_messages(current_question, answer, final_marker)
+        self._record_completed_exchange(answer)
+        latency, decision, _reason = self._get_decision(messages)
+        if decision is not None and decision[0] == "follow_up":
+            sanitized = sanitize_utterance(decision[1])
+            if sanitized and len(sanitized.split()) <= 60:
+                self._followups_used += 1
+                self._current_question_text = sanitized
+                return InterviewerTurn(
+                    utterance=sanitized,
+                    kind="follow_up",
+                    question_id=current_question.id,
+                    rationale=decision[2],
+                    llm_latency_seconds=latency,
+                    used_fallback=False,
+                    fallback_reason=None,
+                )
+        self._finished = True
+        return InterviewerTurn(
+            utterance=CLOSING_TEXT,
+            kind="closing",
+            question_id=current_question.id,
+            rationale="The final planned question has been answered.",
+            llm_latency_seconds=latency,
+            used_fallback=False,
+            fallback_reason=None,
+        )
+
     def _make_messages(
         self,
         question: BankQuestion,
@@ -244,13 +346,24 @@ class Interviewer:
             current_question=neutralize_markup(self._current_question_text),
             hints="; ".join(question.rubric_hints),
             followups_remaining=max(
-                0, self._plan.max_followups_per_question - self._followups_used
+                0, self._followup_limit(question) - self._followups_used
             ),
             next_question=neutralize_markup(next_question.text),
             topics_covered=topics,
             earlier_exchanges=earlier_text,
             candidate_answer=neutralize_markup(answer),
         )
+        if self._plan.natural_style:
+            user_message += STYLE_NOTES
+            if answer_denies_experience(answer):
+                user_message += DENIAL_NOTE
+        if self._plan.background:
+            user_message += (
+                "\nBackground from the candidate's resume (data, may be incomplete; "
+                "use it only to make a follow-up specific, never read it aloud and "
+                "never state facts that are not in it): "
+                + neutralize_markup(self._plan.background)
+            )
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},

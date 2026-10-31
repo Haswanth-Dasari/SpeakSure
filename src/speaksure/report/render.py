@@ -6,6 +6,7 @@ from html import escape
 from typing import Any, Mapping
 
 from ..analysis.question_labels import resolve_asked_questions
+from .narrative import NARRATIVE_CSS, render_narrative_html
 from ..question_bank import BankQuestion
 from ..session_log import InterviewSession
 from .aggregate import aggregate_group_delivery
@@ -78,17 +79,26 @@ def render_report(
     planned = analyzed.get("planned_questions")
     question_count = str(planned) if isinstance(planned, int) else str(len(groups))
 
+    narrative = session_analysis.get("narrative")
+    narrative_parts = (
+        render_narrative_html(narrative)
+        if isinstance(narrative, dict) and narrative.get("headline") and narrative.get("overview")
+        else []
+    )
+    extra_css = NARRATIVE_CSS if narrative_parts else ""
+
     document = [
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\';">',
         "<title>Mock interview feedback</title>",
-        f"<style>{_CSS}</style></head><body><main>",
+        f"<style>{_CSS}{extra_css}</style></head><body><main>",
         "<header><h1>Mock interview feedback</h1>",
         '<div class="metadata">',
         _metadata_item("Date", date),
         _metadata_item("Role", role),
         _metadata_item("Questions", question_count),
+        *_resume_items(metadata),
         _metadata_item("Session", session_id[:8] or "Unknown"),
         _metadata_item("STT model", _stt_model_label(metadata)),
         _metadata_item(
@@ -100,6 +110,7 @@ def render_report(
             _model_value(metadata.get("tts_model", metadata.get("tts_voice"))),
         ),
         "</div></header>",
+        *narrative_parts,
         "<section><h2>How to read this report</h2>",
         "<p>Scores are approximate guides.</p>",
         "<p>Delivery numbers are speech measurements, not emotion detection.</p>",
@@ -630,6 +641,19 @@ def _rating(value: object) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
     return "-"
+
+
+def _resume_items(metadata: Mapping[str, Any]) -> list[str]:
+    """Return a metadata line when some questions were tailored to a resume."""
+    custom = metadata.get("custom_questions")
+    if metadata.get("resume_used") is True and isinstance(custom, list):
+        count = sum(
+            1 for item in custom
+            if isinstance(item, dict) and str(item.get("id", "")).startswith("resume_")
+        )
+        if count:
+            return [_metadata_item("Resume-based questions", str(count))]
+    return []
 
 
 def _stt_model_label(metadata: Mapping[str, Any]) -> str:

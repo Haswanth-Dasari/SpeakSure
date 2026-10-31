@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..llm_client import LLMClient
-from ..question_bank import HR_QUESTIONS
+from ..question_bank import bank_for_session
 from ..session_log import InterviewSession, Turn
 from .audio_delivery import analyze_audio_delivery
 from .content import ASR_HIGH, ASR_LOW, analyze_content
@@ -154,7 +154,7 @@ def _analyze_content_groups(
     progress_callback: Callable[[str, float], None] | None = None,
 ) -> None:
     """Analyze consecutive question groups, attach references, and summarize scores."""
-    bank_by_id = {question.id: question for question in HR_QUESTIONS}
+    bank_by_id = bank_for_session(session.metadata)
     labels = resolve_asked_questions(session, bank_by_id)
     groups: list[tuple[list[int], str | None, str]] = []
     for turn_index, label in enumerate(labels):

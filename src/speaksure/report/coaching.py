@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
-from ..analysis.content import BEHAVIOURAL_QUESTION_IDS
+from ..analysis.content import is_behavioural_question
 from ..analysis.question_labels import resolve_asked_questions
 from ..question_bank import BankQuestion
 from ..session_log import InterviewSession
@@ -241,7 +241,7 @@ def build_findings(
                 ),
             )
         star = group.get("star")
-        if question_id in BEHAVIOURAL_QUESTION_IDS and isinstance(star, dict):
+        if is_behavioural_question(question_id) and isinstance(star, dict):
             missing_parts = [
                 part
                 for part in ("situation", "task", "action", "result")

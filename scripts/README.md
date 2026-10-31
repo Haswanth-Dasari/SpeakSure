@@ -31,6 +31,7 @@ $analyzed = Get-ChildItem data\analysis -Filter '*.analyzed.json' | Sort-Object 
 | `record_eval_clips.py` | Record prompted or spontaneous clips for ASR evaluation. | `.\.venv\Scripts\python.exe scripts\record_eval_clips.py --help` |
 | `repair_transcripts.py` | Repair merged transcript spacing in copied session JSON. | `.\.venv\Scripts\python.exe scripts\repair_transcripts.py --help` |
 | `review_grammar_flags.py` | Export flags for human review or score completed verdicts. | `.\.venv\Scripts\python.exe scripts\review_grammar_flags.py --help` |
+| `review_narrative.py` | Export the written review's claims for human checking, or score the verdicts (E4). | `.\.venv\Scripts\python.exe scripts\review_narrative.py --help` |
 | `run_web.py` | Start the local FastAPI interview application. | `.\.venv\Scripts\python.exe scripts\run_web.py --help` |
 | `show_audio_levels.py` | Inspect audio-level and word-confidence measures per turn. | `.\.venv\Scripts\python.exe scripts\show_audio_levels.py $analyzed.FullName` |
 | `show_word_gaps.py` | Print recognized word timestamps and adjacent gaps. | `.\.venv\Scripts\python.exe scripts\show_word_gaps.py $session.FullName 1` |

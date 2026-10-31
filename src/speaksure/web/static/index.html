@@ -83,6 +83,38 @@
             <input id="vocabulary-hints" class="input" placeholder="IIITDM Kurnool, TensorFlow, Maya Patel">
           </label>
 
+          <div class="field resume-field">
+            <span class="field-label">Resume <span class="optional">(optional)</span></span>
+            <div class="resume-row">
+              <input id="resume-file" class="input" type="file" accept=".pdf,.docx,.txt,.md" aria-describedby="resume-note">
+              <button id="resume-analyze" class="button button-ghost" type="button" disabled>Analyse</button>
+            </div>
+            <p id="resume-note" class="field-note">Read on this computer. Emails, phone numbers and links are removed before anything is sent to the AI service, and only the short summary below is kept. The interviewer will ask about your own projects and skills.</p>
+            <p id="resume-status" class="field-note" role="status" aria-live="polite"></p>
+            <details id="resume-review" class="resume-review hidden" open>
+              <summary>Check what the interviewer will use</summary>
+              <label class="field">About you
+                <input id="resume-headline" class="input" maxlength="120">
+              </label>
+              <label class="field">Skills <span class="optional">(one per line)</span>
+                <textarea id="resume-skills" class="input" rows="3"></textarea>
+              </label>
+              <label class="field">Projects <span class="optional">(one per line: name - what it does)</span>
+                <textarea id="resume-projects" class="input" rows="3"></textarea>
+              </label>
+              <label class="field">Experience <span class="optional">(one per line)</span>
+                <textarea id="resume-experience" class="input" rows="2"></textarea>
+              </label>
+              <label class="field">Education <span class="optional">(one per line)</span>
+                <textarea id="resume-education" class="input" rows="2"></textarea>
+              </label>
+              <label class="field">Achievements <span class="optional">(one per line)</span>
+                <textarea id="resume-achievements" class="input" rows="2"></textarea>
+              </label>
+              <p class="field-note">Delete anything that is wrong or that you would rather not be asked about.</p>
+            </details>
+          </div>
+
           <div class="check-row">
             <label class="check-label">
               <input id="content-scoring" type="checkbox" checked>

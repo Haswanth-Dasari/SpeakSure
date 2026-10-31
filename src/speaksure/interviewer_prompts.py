@@ -53,3 +53,24 @@ CLOSING_TEXT = (
     "Thank you, that was the last question. That is the end of the interview. "
     "I will now prepare your feedback."
 )
+
+
+# Optional guidance appended to the user message for web interviews. It lives here,
+# not in SYSTEM_PROMPT, so the original numbered rules stay exactly as they were.
+STYLE_NOTES = (
+    "\nInterviewer style notes: Sound like a real person, not a form. Vary how you "
+    "react and how you ask, and do not start every utterance the same way. Never "
+    "assume something the candidate did not say. If the candidate says something did "
+    "not happen to them, accept that in a few words and either ask about the closest "
+    "real situation or choose next_question; never ask how they solved, handled or "
+    "learned from something they said did not happen. If the answer is already "
+    "specific and complete, prefer next_question. When you do ask a follow-up, build "
+    "it on something concrete the candidate actually said, such as a tool, a choice "
+    "or a result."
+)
+
+# Added when the answer says the asked-about situation never happened.
+DENIAL_NOTE = (
+    "\nNote: the candidate says this situation did not happen to them. Do not "
+    "presuppose that it did."
+)

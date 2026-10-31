@@ -181,6 +181,8 @@ browser or printed.
 
 ## Evaluation toolkit
 
+A step-by-step guide to the four experiments (E1 to E4), with exact commands and what to record for the course report, is in [`docs/EVALUATION.md`](docs/EVALUATION.md). A draft report is in [`docs/COURSE_REPORT.md`](docs/COURSE_REPORT.md) and viva preparation is in [`docs/VIVA_QA.md`](docs/VIVA_QA.md).
+
 Evaluation prompts, manifests, grammar cases, and collected clips are
 course-specific local files under the ignored `data/eval` directory and are
 not distributed in the repository. After preparing `prompts.txt`, record a

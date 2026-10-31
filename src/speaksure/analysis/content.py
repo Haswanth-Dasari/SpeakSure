@@ -21,6 +21,15 @@ from .text_utils import normalize_token
 
 # Question ids whose content ratings include the STAR component.
 BEHAVIOURAL_QUESTION_IDS = ("teamwork", "conflict", "challenge", "mistake")
+
+
+def is_behavioural_question(question_id: str | None) -> bool:
+    """Return whether an answer should also be rated against the STAR structure."""
+    return bool(question_id) and (
+        question_id in BEHAVIOURAL_QUESTION_IDS
+        or question_id in {"feedback", "learning"}
+        or str(question_id).startswith("resume_project")
+    )
 # Minimum normalized transcript token count eligible for LLM scoring.
 MIN_WORDS_TO_RATE = 6
 # Relative weights for content-score components before unavailable components are removed.
@@ -376,7 +385,7 @@ def _analyze_content_once(
             0,
         )
 
-    behavioural = question.id in BEHAVIOURAL_QUESTION_IDS
+    behavioural = is_behavioural_question(question.id)
     numbered_hints = "\n".join(
         f"{index}. {hint}" for index, hint in enumerate(question.rubric_hints, 1)
     )

@@ -119,3 +119,49 @@ def select_questions(count: int, seed: int | None = None) -> tuple[BankQuestion,
     return (HR_QUESTIONS[0],) + tuple(
         question for question in remaining if question.id in selected_ids
     )
+
+
+def question_to_dict(question: BankQuestion) -> dict[str, object]:
+    """Serialize a question so it can be stored in session metadata."""
+    return {
+        "id": question.id,
+        "topic": question.topic,
+        "text": question.text,
+        "rubric_hints": list(question.rubric_hints),
+    }
+
+
+def bank_for_session(metadata: object) -> dict[str, BankQuestion]:
+    """Return the HR bank plus any custom (for example resume) questions of a session.
+
+    Custom questions are stored in ``metadata["custom_questions"]`` so that the
+    analysis and the report can rate answers against the right hints.
+    """
+    bank = {question.id: question for question in HR_QUESTIONS}
+    custom = metadata.get("custom_questions") if isinstance(metadata, dict) else None
+    if not isinstance(custom, list):
+        return bank
+    for item in custom:
+        if not isinstance(item, dict):
+            continue
+        question_id = item.get("id")
+        text = item.get("text")
+        hints = item.get("rubric_hints")
+        if (
+            isinstance(question_id, str)
+            and question_id
+            and question_id not in bank
+            and isinstance(text, str)
+            and text
+            and isinstance(hints, list)
+            and hints
+            and all(isinstance(hint, str) for hint in hints)
+        ):
+            topic = item.get("topic")
+            bank[question_id] = BankQuestion(
+                id=question_id,
+                topic=topic if isinstance(topic, str) and topic else "resume",
+                text=text,
+                rubric_hints=tuple(hints),
+            )
+    return bank

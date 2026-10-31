@@ -1,4 +1,4 @@
-import { createSession, finishSession, getHealth, getSessionStatus, listSessions, submitAnswer } from "./api.js";
+import { createSession, finishSession, getHealth, getSessionStatus, listSessions, submitAnswer, uploadResume } from "./api.js";
 import { AudioCaptureSession, isBluetoothOrHeadset, requestMicrophonePermission, runMicrophoneTest } from "./audio.js";
 import { InterviewerAudioPlayer } from "./interviewer-audio.js";
 import { VadDetector } from "./vad.js";
@@ -12,6 +12,16 @@ const el = {
   otherRoleWrap: document.getElementById("other-role-wrap"),
   otherRole: document.getElementById("other-role"),
   hints: document.getElementById("vocabulary-hints"),
+  resumeFile: document.getElementById("resume-file"),
+  resumeAnalyze: document.getElementById("resume-analyze"),
+  resumeStatus: document.getElementById("resume-status"),
+  resumeReview: document.getElementById("resume-review"),
+  resumeHeadline: document.getElementById("resume-headline"),
+  resumeSkills: document.getElementById("resume-skills"),
+  resumeProjects: document.getElementById("resume-projects"),
+  resumeExperience: document.getElementById("resume-experience"),
+  resumeEducation: document.getElementById("resume-education"),
+  resumeAchievements: document.getElementById("resume-achievements"),
   micSelect: document.getElementById("mic-select"),
   grantMic: document.getElementById("grant-mic"),
   testMic: document.getElementById("test-mic"),
@@ -292,6 +302,67 @@ function stopClock() {
   app.roomTimer = null;
 }
 
+function splitLines(text) {
+  return text.split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+function fillResumeForm(profile) {
+  el.resumeHeadline.value = profile.headline || "";
+  el.resumeSkills.value = (profile.skills || []).join("\n");
+  el.resumeProjects.value = (profile.projects || [])
+    .map((project) => {
+      const tools = (project.technologies || []).length ? ` (uses ${project.technologies.join(", ")})` : "";
+      return `${project.name}${project.summary ? " - " + project.summary : ""}${tools}`;
+    })
+    .join("\n");
+  el.resumeExperience.value = (profile.experience || []).join("\n");
+  el.resumeEducation.value = (profile.education || []).join("\n");
+  el.resumeAchievements.value = (profile.achievements || []).join("\n");
+  el.resumeReview.classList.remove("hidden");
+}
+
+function readResumeProfile() {
+  const projects = splitLines(el.resumeProjects.value).map((line) => {
+    const [name, ...rest] = line.split(" - ");
+    return { name: name.trim(), summary: rest.join(" - ").trim(), technologies: [] };
+  });
+  const profile = {
+    headline: el.resumeHeadline.value.trim(),
+    skills: splitLines(el.resumeSkills.value),
+    projects,
+    experience: splitLines(el.resumeExperience.value),
+    education: splitLines(el.resumeEducation.value),
+    achievements: splitLines(el.resumeAchievements.value),
+  };
+  const hasContent = profile.headline || projects.length || Object.values(profile).some((v) => Array.isArray(v) && v.length);
+  return hasContent ? profile : undefined;
+}
+
+async function analyseResume() {
+  const file = el.resumeFile.files?.[0];
+  if (!file) return;
+  el.resumeAnalyze.disabled = true;
+  el.resumeStatus.textContent = "Reading your resume. This takes a few seconds…";
+  try {
+    const data = await uploadResume(file);
+    fillResumeForm(data.profile);
+    const removed = data.info ? (data.info.emails || 0) + (data.info.phones || 0) + (data.info.links || 0) : 0;
+    el.resumeStatus.textContent =
+      data.warning ||
+      `Done. Please check the details below${removed ? ` (${removed} contact detail${removed === 1 ? "" : "s"} removed)` : ""}.`;
+  } catch (error) {
+    el.resumeStatus.textContent = error.message || "The resume could not be read.";
+  } finally {
+    el.resumeAnalyze.disabled = false;
+  }
+}
+
+el.resumeFile.addEventListener("change", () => {
+  el.resumeAnalyze.disabled = !el.resumeFile.files?.length;
+  el.resumeStatus.textContent = "";
+});
+el.resumeAnalyze.addEventListener("click", analyseResume);
+
 async function joinRoom(event) {
   event.preventDefault();
   if (el.join.disabled) return;
@@ -307,6 +378,7 @@ async function joinRoom(event) {
       length: selectedLength(),
       candidateName: el.name.value,
       // The candidate's own name is a likely mis-heard word, so add it as a hint.
+      resumeProfile: readResumeProfile(),
       vocabularyHints: [el.name.value.trim().slice(0, 40), el.hints.value.trim()]
         .filter(Boolean)
         .join(", ") || undefined,

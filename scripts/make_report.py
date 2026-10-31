@@ -11,7 +11,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from speaksure.question_bank import HR_QUESTIONS
+from speaksure.question_bank import bank_for_session
 from speaksure.report import render_report
 
 
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     if not output_path.is_absolute():
         output_path = Path.cwd() / output_path
     generated_at = args.generated_at or datetime.now(timezone.utc).isoformat()
-    bank_by_id = {question.id: question for question in HR_QUESTIONS}
+    bank_by_id = bank_for_session(analyzed.get("metadata"))
     try:
         report = render_report(analyzed, bank_by_id, generated_at)
         output_path.parent.mkdir(parents=True, exist_ok=True)

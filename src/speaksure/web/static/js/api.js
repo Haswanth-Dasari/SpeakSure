@@ -17,11 +17,31 @@ export async function listSessions() {
   return Array.isArray(data.sessions) ? data.sessions : [];
 }
 
+export async function uploadResume(file) {
+  const response = await fetch("/api/resume", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Filename": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    // Fall through to the generic message below.
+  }
+  if (!response.ok) throw new Error(data.message || `The resume could not be read (${response.status}).`);
+  return data;
+}
+
 export async function createSession({
   role,
   length,
   candidateName,
   vocabularyHints,
+  resumeProfile,
   inputDeviceLabel,
   constraints,
 }) {
@@ -35,6 +55,7 @@ export async function createSession({
     },
   };
   if (vocabularyHints) payload.vocabulary_hints = vocabularyHints;
+  if (resumeProfile) payload.resume_profile = resumeProfile;
 
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 60000);

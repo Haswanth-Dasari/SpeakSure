@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
 
 import numpy as np
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -35,7 +35,19 @@ from ..llm_client import (
     build_analysis_llm_client,
     build_llm_client,
 )
-from ..question_bank import HR_QUESTIONS, select_questions
+from ..question_bank import bank_for_session, question_to_dict
+from ..resume import (
+    MAX_FILE_BYTES,
+    ResumeError,
+    empty_profile,
+    extract_profile,
+    extract_resume_text,
+    merge_hints,
+    resume_hotwords,
+    validate_profile,
+)
+from ..interview_planner import built_in_ids, plan_realistic
+from ..resume_questions import profile_background
 from ..session_log import InterviewSession
 from ..speech_to_text import (
     LocalSpeechToTextProvider,
@@ -54,6 +66,7 @@ from ..analysis.session_analysis import analyze_session
 from ..analysis.grammar import _load_pipeline
 from ..configuration import get_report_stt_model
 from ..report import render_report
+from ..report.narrative import generate_narrative
 from ..retranscribe import retranscribe_session
 from .sessions import (
     WebSession,
@@ -153,6 +166,7 @@ class CreateSessionRequest(BaseModel):
     length: Literal["quick", "standard", "full"] = "standard"
     candidate_name: str | None = Field(default=None, max_length=120)
     vocabulary_hints: list[str] | str | None = Field(default=None)
+    resume_profile: dict[str, Any] | None = Field(default=None)
     client: ClientInfo
 
     @field_validator("role")
@@ -165,6 +179,18 @@ class CreateSessionRequest(BaseModel):
         if not normalized:
             raise ValueError("role must contain between 1 and 60 non-space characters.")
         return normalized
+
+    @field_validator("resume_profile", mode="before")
+    @classmethod
+    def validate_resume_profile(cls, value: object) -> dict[str, Any] | None:
+        """Normalize a user-reviewed resume profile; blank profiles become None."""
+        if value is None:
+            return None
+        try:
+            profile = validate_profile(value)
+        except ResumeError as error:
+            raise ValueError(str(error)) from None
+        return profile if any(profile.values()) else None
 
     @field_validator("vocabulary_hints", mode="before")
     @classmethod
@@ -340,6 +366,16 @@ def create_app(
             "llm_configured": active_services.llm_configured,
         }
 
+    @app.post("/api/resume")
+    async def read_resume(
+        request: Request, x_filename: str = Header(default="resume.txt")
+    ) -> Response:
+        """Read an uploaded resume locally and return an editable candidate profile."""
+        data = await request.body()
+        if len(data) > MAX_FILE_BYTES:
+            return _error_response(413, "resume_too_large", "The file is larger than 2 MB.")
+        return await run_in_threadpool(_profile_from_upload, active_services, data, x_filename)
+
     @app.post("/api/sessions")
     def create_session(payload: CreateSessionRequest) -> dict[str, object]:
         """Create and persist an interview session and expose its opening line."""
@@ -349,11 +385,22 @@ def create_app(
             else QUESTION_COUNTS[payload.length]
         )
         role = payload.role or active_settings.role
-        questions = select_questions(question_count)
+        resume_profile = payload.resume_profile
+        planning_llm = None
+        if resume_profile and active_services.analysis_llm_factory is not None:
+            try:
+                planning_llm = active_services.analysis_llm_factory()
+            except Exception:
+                LOGGER.warning("Resume question planning will use templates only.")
+        questions = plan_realistic(question_count, resume_profile, planning_llm)
         plan = InterviewPlan(
             questions=questions,
             role=role,
             candidate_name=(payload.candidate_name or "").strip(),
+            background=profile_background(resume_profile) if resume_profile else "",
+            followup_on_last_question=bool(resume_profile),
+            natural_style=True,
+            deep_dive_followups=2 if resume_profile else 1,
         )
         interviewer = active_services.interviewer_factory(plan)
         opening = interviewer.opening()
@@ -367,8 +414,23 @@ def create_app(
             "input_device": payload.client.input_device_label,
             "capture_constraints": payload.client.constraints,
         }
-        if payload.vocabulary_hints:
-            metadata["vocabulary_hints"] = payload.vocabulary_hints
+        session_hints = list(payload.vocabulary_hints or [])
+        if resume_profile:
+            # Distinctive resume terms (projects, tools, institutions) help the
+            # speech model spell them correctly, both live and in the report pass.
+            session_hints = merge_hints(session_hints, resume_hotwords(resume_profile))
+        if session_hints:
+            metadata["vocabulary_hints"] = session_hints
+        custom_questions = [
+            question_to_dict(question)
+            for question in questions
+            if question.id not in built_in_ids()
+        ]
+        if custom_questions:
+            metadata["custom_questions"] = custom_questions
+        if resume_profile and any(q["id"].startswith("resume_") for q in custom_questions):
+            metadata["resume_used"] = True
+            metadata["resume_profile"] = resume_profile
         session = create_session_record(question_count, metadata)
         LOGGER.info("Creating session %s: synthesizing opening line.", session.session_id)
         try:
@@ -601,13 +663,11 @@ def _default_services(settings: WebSettings) -> WebServices:
         """Build the existing interviewer with configured Groq or safe fallback."""
         return Interviewer(build_llm_client(GroqLLMConfig.from_env()), plan)
 
-    bank_by_id = {question.id: question for question in HR_QUESTIONS}
-
     def report_function(analyzed: InterviewSession) -> str:
         """Render an analyzed session using the existing standalone report."""
         return render_report(
             analyzed.to_dict(),
-            bank_by_id,
+            bank_for_session(analyzed.metadata),
             datetime.now(timezone.utc).isoformat(),
         )
 
@@ -696,6 +756,37 @@ def _timing_header(value: str | None) -> float | None:
     if not np.isfinite(milliseconds) or not 0 <= milliseconds <= 600_000:
         return None
     return milliseconds
+
+
+def _profile_from_upload(services: WebServices, data: bytes, filename: str) -> JSONResponse:
+    """Extract text, redact contact details, and ask the model for a verified profile."""
+    try:
+        text = extract_resume_text(data, filename)
+    except ResumeError as error:
+        return _error_response(422, "resume_unreadable", str(error))
+    if services.analysis_llm_factory is None or not services.llm_configured:
+        return JSONResponse(
+            {
+                "profile": empty_profile(),
+                "info": {},
+                "warning": "No language-model key is configured, so the resume could not "
+                "be analysed. You can type your details in by hand.",
+            }
+        )
+    try:
+        profile, info = extract_profile(text, services.analysis_llm_factory())  # type: ignore[arg-type]
+    except ResumeError as error:
+        return JSONResponse(
+            {
+                "profile": empty_profile(),
+                "info": {},
+                "warning": f"{error} You can type your details in by hand.",
+            }
+        )
+    except Exception:
+        LOGGER.exception("Resume analysis failed.")
+        return _error_response(502, "resume_failed", "The resume could not be analysed right now.")
+    return JSONResponse({"profile": profile, "info": info, "warning": ""})
 
 
 def _error_response(status: int, code: str, message: str) -> JSONResponse:
@@ -1060,6 +1151,17 @@ def _run_analysis(
             role=role,
             progress_callback=update_progress,
         )
+        if analysis_llm is not None:
+            update_progress("report", 0.0)
+            try:
+                narrative = generate_narrative(
+                    analyzed.to_dict(), bank_for_session(analyzed.metadata), analysis_llm
+                )
+            except Exception:
+                LOGGER.exception("The written review failed; the report will omit it.")
+                narrative = None
+            if narrative:
+                analyzed.analysis["narrative"] = narrative
         analysis_path = services.analysis_dir / f"{entry.session.session_id}.analyzed.json"
         analyzed.save_to(analysis_path)
         update_progress("report", 0.0)
