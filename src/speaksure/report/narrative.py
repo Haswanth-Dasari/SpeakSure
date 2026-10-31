@@ -167,7 +167,8 @@ def _quote_is_verified(quote: str, answers_normalized: str) -> bool:
     words = quote.split()
     if not 3 <= len(words) <= 25:
         return False
-    return _normalize(quote) in answers_normalized
+    # Whole-word match: a quote cut off mid-word ("believe th") must not pass.
+    return f" {_normalize(quote)} " in f" {answers_normalized} "
 
 
 def _numbers_ok(text: str, allowed: set[str]) -> bool:

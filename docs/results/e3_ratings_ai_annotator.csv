@@ -1,0 +1,12 @@
+﻿session,question_id,relevance,specificity,clarity,note
+330330eaef3b433f8dd59fc82e17cfb4,intro,4,3,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+330330eaef3b433f8dd59fc82e17cfb4,motivation,3,2,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+330330eaef3b433f8dd59fc82e17cfb4,weakness,3,2,2,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+330330eaef3b433f8dd59fc82e17cfb4,pressure,4,3,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+330330eaef3b433f8dd59fc82e17cfb4,goals,3,1,2,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+53d8396bf6444d71b97d2a48380422e7,intro,4,3,4,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+53d8396bf6444d71b97d2a48380422e7,motivation,3,2,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+53d8396bf6444d71b97d2a48380422e7,challenge,3,2,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+df0df01670bb48c39b5cd823b258ad91,intro,3,2,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+df0df01670bb48c39b5cd823b258ad91,strength,4,2,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"
+df0df01670bb48c39b5cd823b258ad91,weakness,2,1,3,"annotator: Claude (AI assistant), rated from transcript before seeing model scores"

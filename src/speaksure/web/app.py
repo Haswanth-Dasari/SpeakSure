@@ -67,6 +67,7 @@ from ..analysis.grammar import _load_pipeline
 from ..configuration import get_report_stt_model
 from ..report import render_report
 from ..report.narrative import generate_narrative
+from ..report.options import rule_grammar_visible, without_rule_grammar
 from ..retranscribe import retranscribe_session
 from .sessions import (
     WebSession,
@@ -665,8 +666,11 @@ def _default_services(settings: WebSettings) -> WebServices:
 
     def report_function(analyzed: InterviewSession) -> str:
         """Render an analyzed session using the existing standalone report."""
+        data = analyzed.to_dict()
+        if not rule_grammar_visible():
+            data = without_rule_grammar(data)
         return render_report(
-            analyzed.to_dict(),
+            data,
             bank_for_session(analyzed.metadata),
             datetime.now(timezone.utc).isoformat(),
         )

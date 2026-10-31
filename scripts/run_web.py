@@ -50,6 +50,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Median of three ratings per question unless the .env says otherwise.
     os.environ.setdefault("CONTENT_RATING_SAMPLES", "3")
+    # The rule-based grammar section was almost all false alarms on speech (E2).
+    os.environ.setdefault("SHOW_RULE_GRAMMAR", "0")
     stt_config = LocalTranscriptionConfig.from_env()
     description = describe_stt_configuration(stt_config)
     tts_config = SpeechSynthesisConfig.from_env()

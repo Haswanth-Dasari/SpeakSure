@@ -61,3 +61,17 @@ Answer in your own words. Each line gives the point to make and where to look.
 22. **How did you use AI assistance, and how did you verify the work?** State it
     plainly: assistants designed and wrote code under your direction; you ran it,
     recorded the data, tested, and checked results against real output.
+23. **Was the bigger speech model always better?** No. In one interview the larger
+    report-pass model heard the name wrongly where the live model, helped by the
+    candidate's own hints, was right. So the system keeps the live text for an answer
+    when it contains more of the candidate's names and terms.
+24. **How accurate was the written review, and how do you know?** One session, nine
+    claims checked against the transcript: seven correct (0.78). Language notes were
+    right 2 of 3 times, against 1 of 21 for the old rule-based flags. State that the
+    verdicts came from an AI annotator and the sample is small. (`docs/results/e4_review.md`)
+25. **Why was the rule-based grammar section removed from the report?** Measured
+    precision was about 5% on spoken transcripts. A feature that is mostly wrong
+    should not be shown. The verified language notes replace it. (`docs/results/e2_grammar.md`)
+26. **Why do the scores run high, and does it matter?** The model ranked answers like
+    an independent reader (Spearman 0.92) but scored about 11 points higher on all 10.
+    Use the scores to compare answers and track progress, not as an absolute grade.

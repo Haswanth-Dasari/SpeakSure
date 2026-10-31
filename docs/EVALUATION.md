@@ -92,3 +92,16 @@ answers is a good target.
 For each experiment record: number of sessions and answers, the table printed by
 the script, and two or three concrete examples (one success, one failure). Keep
 the raw CSV files (without audio) so the numbers can be reproduced.
+
+## Status and spot-check
+
+E2 and E3 were completed on the three early sessions by an AI assistant acting as
+annotator (blind to model scores for E3). The results and every individual verdict
+are in `docs/results/`. To make them defensible as your own evidence, do a
+10-minute spot-check: open each of the two CSV files in `docs/results/`, pick 10 rows at random,
+and note whether you agree. Report the agreement rate next to the numbers
+(for example "9 of 10 verdicts confirmed"), and change any row you disagree with.
+
+E4 was completed on one interview created after the written review was added
+(9 claims). More sessions would strengthen it: run `scripts/review_narrative.py` on
+new `*.analyzed.json` files and check the claims yourself.

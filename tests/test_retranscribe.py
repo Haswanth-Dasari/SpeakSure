@@ -103,3 +103,37 @@ def test_choose_transcript_rules() -> None:
     assert choose_transcript("a b c d e f g h", "")[0] is False
     assert choose_transcript("a b c d e f g h", "a b")[0] is False
     assert choose_transcript("a b c d e f g h", "a b c d e f g h i")[0] is True
+
+
+def test_live_text_is_kept_when_it_has_more_of_the_candidates_names() -> None:
+    live = "My name is Haswanth Dasari and I study at IIITDM Kurnool"
+    report = "My name is Ashwan Dasari and I study at IIITDM Kurnool"
+    terms = ["Haswanth", "IIITDM Kurnool"]
+    keep_live, reason = choose_transcript(live, report, terms)
+    assert keep_live is False and "names" in reason
+    assert choose_transcript(report, live, terms)[0] is True  # the better one wins either way
+    assert choose_transcript(live, report, [])[0] is True  # no hints: no preference
+    assert choose_transcript(live, live.replace("Dasari", "Dasare"), terms)[0] is True  # equal hits
+
+
+def test_session_pass_applies_the_name_rule_per_turn(tmp_path: Path) -> None:
+    session = InterviewSession.new("hr", "standard", 2)
+    for name, text in (
+        ("a.wav", "My name is Haswanth Dasari and I build speech tools every day"),
+        ("b.wav", "I use Flask for the backend and I like writing clean code daily"),
+    ):
+        (tmp_path / name).write_bytes(b"RIFF")
+        session.add_turn("Q", answer=result(text), audio_path=str(tmp_path / name))
+    provider = FakeProvider(
+        {
+            "a.wav": result("My name is Ashwan Dasari and I build speech tools every day"),
+            "b.wav": result("I use Flask for the backend and I like writing clean code every day"),
+        }
+    )
+    new = retranscribe_session(
+        session, provider, report_model="large-v3", live_model="medium", hotwords="Haswanth, Flask"
+    )
+    assert "Haswanth" in new.turns[0].answer.text  # kept live: it had the name
+    assert new.turns[0].analysis["transcript_passes"]["used"] == "live"
+    assert "every day" in new.turns[1].answer.text  # report text used when hints tie
+    assert new.turns[1].analysis["transcript_passes"]["used"] == "report"

@@ -193,3 +193,15 @@ def test_full_report_shows_the_review_first_and_is_unchanged_without_it() -> Non
     html = render_report(session, bank, "now")
     assert html.index("How your interview went") < html.index("How to read this report") < html.index("<h2>Summary</h2>")
     assert "Question-by-question feedback" in html  # the detailed evidence is still there
+
+
+def test_a_quote_cut_off_mid_word_is_dropped() -> None:
+    reply = good_reply(
+        work_on=[{"point": "Give a real example", "tip": "Prepare a story", "quote": "I have no disagree"}]
+    )
+    result = parse_narrative(json.dumps(reply), facts())
+    assert result["work_on"][0]["quote"] == ""  # "disagree" is not a whole word in the answer
+    whole = good_reply(
+        work_on=[{"point": "Give a real example", "tip": "Prepare a story", "quote": "I have no disagreements"}]
+    )
+    assert parse_narrative(json.dumps(whole), facts())["work_on"][0]["quote"] == "I have no disagreements"

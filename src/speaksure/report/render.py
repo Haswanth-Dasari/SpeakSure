@@ -312,7 +312,8 @@ def _render_group(
     else:
         html_parts.append("<p>Content analysis was not run.</p>")
 
-    html_parts.append(_grammar_block(turn_indexes, turns))
+    if not session_analysis.get("rule_grammar_hidden"):
+        html_parts.append(_grammar_block(turn_indexes, turns))
     html_parts.append(_group_metrics_table(turn_indexes, turns))
     html_parts.append(_answer_metrics_table(turn_indexes, turns))
     html_parts.append("</article>")

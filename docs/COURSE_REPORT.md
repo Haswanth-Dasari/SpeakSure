@@ -1,8 +1,8 @@
 # SpeakSure: a voice-first mock interview coach
 
-*Draft for the NLP course report. Sections marked **TO FILL** need numbers from the
-experiments in `docs/EVALUATION.md`. Nothing in this draft is a result unless a
-number is shown.*
+*Draft for the NLP course report. E2, E3 and E4 results were produced with an AI
+assistant as annotator and are marked provisional until you add a human spot-check
+(`docs/EVALUATION.md`). Nothing in this draft is a result unless a number is shown.*
 
 ## 1. Introduction
 
@@ -98,17 +98,43 @@ versus 0.060), though with few clips.
 **Decision.** Medium runs live (good accuracy at about 0.08 real-time factor);
 large-v3 re-transcribes the audio for the report.
 
-### 4.2 E3: content scoring against a human — TO FILL
-Sessions: __, answers rated: __. Spearman correlation: __. Mean absolute error
-(points on 0 to 100): __. Band agreement: __. Median spread across three ratings: __.
+### 4.2 E3: content scoring against an independent rating
 
-### 4.3 E2: grammar flags — TO FILL
-Flags reviewed: __. Precision per category (article, subject-verb agreement,
-verb tense): __. Examples of false alarms and why the parser failed on speech: __.
+*Provisional: the reference ratings come from an AI assistant working blind from
+the transcripts, not from a human. A human spot-check is still to be added.*
 
-### 4.4 E4: written review accuracy — TO FILL
-Claims reviewed: __. Precision for language notes: __; strengths: __;
-improvements: __. Comparison with E2 precision: __.
+On 10 comparable answers from 3 sessions, the model's scores rank answers almost
+the same way as the independent ratings (Spearman 0.92, 95% bootstrap interval 0.66
+to 0.99), but they are systematically more generous: higher on all 10 answers, by
+11.3 points on average, with band agreement on 7 of 10. Clarity agreed least
+(rho 0.47). Repeated ratings of the same answer varied by 6.3 to 7.0 points, which
+supports reporting the median of three. Details: `docs/results/e3_content.md`.
+
+### 4.3 E2: rule-based grammar flags
+
+*Provisional: verdicts are from an AI assistant, with every verdict and reason
+auditable in `docs/results/`.*
+
+Of 22 flags in 3 sessions, 1 was a real error, 1 was unsure and 20 were false alarms
+(precision 0.05; articles 0.10, subject-verb agreement 0.00). Causes were idioms
+("from beginning to end"), mass nouns, parser confusion on spoken text and speech
+recognition errors blamed on the speaker. At least five clear errors went unflagged.
+A rule-based parser designed for written text therefore does not transfer to spoken
+transcripts, and the report hides it by default. Details: `docs/results/e2_grammar.md`.
+
+### 4.4 E4: written review accuracy
+
+*Provisional: one session, nine claims, verdicts from an AI assistant (auditable in
+`docs/results/`).*
+
+Seven of nine claims were correct (0.78): language notes 2 of 3, strengths 2 of 3,
+improvements 3 of 3. The two errors were a natural sentence wrongly "corrected" and
+a strength overstated from an unrelated quote. Language notes were right far more
+often than the rule-based flags of E2 (0.67 versus 0.05). The check also exposed two
+defects that were then fixed: a quote cut off mid-word was accepted, and the larger
+report-pass speech model sometimes lost a name the live model had right, so the live
+transcript is now kept for an answer when it contains more of the candidate's names
+and terms. Details: `docs/results/e4_review.md`.
 
 ## 5. Limitations
 
@@ -119,6 +145,8 @@ improvements: __. Comparison with E2 precision: __.
   underestimates.
 - Content scores come from a language model and are approximate; the median of
   three ratings reduces but does not remove variation.
+- The report-pass speech model is not always better: it can lose names that the live
+  model gets right with the candidate's hints, so a per-answer guard keeps the better one.
 - Pace, pause and thinking-time thresholds are heuristics, not standards.
 - Delivery measurements are speech measurements, not emotion detection.
 - The interviewer asks questions from a pool; it does not invent new topics mid
