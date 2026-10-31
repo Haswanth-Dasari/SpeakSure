@@ -200,7 +200,7 @@ class GroqChatClient:
         ):
             return self._safe_error(
                 f"Groq model '{self.model}' was not found. Check the model id with "
-                "scripts/llm_demo.py --list-models."
+                "scripts/demos/llm_demo.py --list-models."
             )
         if isinstance(error, APIStatusError):
             detail = self._error_detail(error)

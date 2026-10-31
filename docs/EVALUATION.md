@@ -24,8 +24,8 @@ answers is a good target.
 1. Create blind rating sheets (the model scores are hidden):
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\make_rating_sheet.py --help
-   .\.venv\Scripts\python.exe scripts\make_rating_sheet.py (Get-ChildItem data\analysis -Filter *.analyzed.json).FullName
+   .\.venv\Scripts\python.exe scripts\eval\make_rating_sheet.py --help
+   .\.venv\Scripts\python.exe scripts\eval\make_rating_sheet.py (Get-ChildItem data\analysis -Filter *.analyzed.json).FullName
    ```
 
 2. Open the generated sheet and fill relevance, specificity and clarity (1 to 5,
@@ -34,7 +34,7 @@ answers is a good target.
 3. Compare:
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\eval_content.py --help
+   .\.venv\Scripts\python.exe scripts\eval\eval_content.py --help
    ```
 
    Report: Spearman correlation, mean absolute error, and agreement of the
@@ -44,7 +44,7 @@ answers is a good target.
    analysis a few times on the same session and summarise:
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\content_stability.py --help
+   .\.venv\Scripts\python.exe scripts\eval\content_stability.py --help
    ```
 
 ## E2: grammar flags
@@ -52,7 +52,7 @@ answers is a good target.
 1. Export every flag from the rule-based analyzer:
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\review_grammar_flags.py (Get-ChildItem data\analysis -Filter *.analyzed.json).FullName
+   .\.venv\Scripts\python.exe scripts\eval\review_grammar_flags.py (Get-ChildItem data\analysis -Filter *.analyzed.json).FullName
    ```
 
 2. In `data\eval\grammar_flags_review.csv`, read each sentence (the flagged words
@@ -61,7 +61,7 @@ answers is a good target.
 3. Score it:
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\review_grammar_flags.py --score
+   .\.venv\Scripts\python.exe scripts\eval\review_grammar_flags.py --score
    ```
 
    Report precision per category. Expect it to be modest: spoken, run-on text is hard
@@ -73,7 +73,7 @@ answers is a good target.
 1. Export every claim the review makes (language notes, strengths, improvements):
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\review_narrative.py (Get-ChildItem data\analysis -Filter *.analyzed.json).FullName
+   .\.venv\Scripts\python.exe scripts\eval\review_narrative.py (Get-ChildItem data\analysis -Filter *.analyzed.json).FullName
    ```
 
 2. In `data\eval\narrative_review.csv`, mark each claim `correct`, `incorrect` or
@@ -81,7 +81,7 @@ answers is a good target.
 3. Score it:
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\review_narrative.py --score
+   .\.venv\Scripts\python.exe scripts\eval\review_narrative.py --score
    ```
 
    Compare language-note precision here with the rule-based precision from E2.
@@ -103,5 +103,5 @@ and note whether you agree. Report the agreement rate next to the numbers
 (for example "9 of 10 verdicts confirmed"), and change any row you disagree with.
 
 E4 was completed on one interview created after the written review was added
-(9 claims). More sessions would strengthen it: run `scripts/review_narrative.py` on
+(9 claims). More sessions would strengthen it: run `scripts/eval/review_narrative.py` on
 new `*.analyzed.json` files and check the claims yourself.

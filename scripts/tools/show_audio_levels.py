@@ -1,7 +1,7 @@
 """Compare audio levels and recognition confidence across analyzed sessions.
 
 Usage (from the project root, venv active):
-    python scripts/show_audio_levels.py data/analysis/<a>.analyzed.json [<b>.analyzed.json ...]
+    python scripts/tools/show_audio_levels.py data/analysis/<a>.analyzed.json [<b>.analyzed.json ...]
 
 Purpose: find out whether poor transcripts go together with quiet or distant audio.
 Each row is one answer. Columns: peak (loudest sample, 0-1), mean_dB (average level of the

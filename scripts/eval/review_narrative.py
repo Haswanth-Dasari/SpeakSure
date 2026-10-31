@@ -5,8 +5,8 @@ This tool measures how trustworthy it is: for every language note, strength and
 improvement in saved analyzed sessions, a person marks the claim as correct,
 incorrect or unsure, and precision is reported per kind of claim.
 
-Export:  python scripts/review_narrative.py data/analysis/*.analyzed.json
-Score:   python scripts/review_narrative.py --score
+Export:  python scripts/eval/review_narrative.py data/analysis/*.analyzed.json
+Score:   python scripts/eval/review_narrative.py --score
 """
 
 from __future__ import annotations

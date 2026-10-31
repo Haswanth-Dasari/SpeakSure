@@ -158,7 +158,7 @@ Analyzed JSON is written under `data/analysis` unless `--out` is specified.
 For timing summaries, pass a session file or the sessions directory to:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\latency_report.py data\sessions
+.\.venv\Scripts\python.exe scripts\eval\latency_report.py data\sessions
 ```
 
 This prints a Markdown table of stage median, nearest-rank 90th percentile, and
@@ -190,9 +190,9 @@ manifest and benchmark the selected models:
 
 ```powershell
 if (-not (Test-Path data\eval\prompts.txt)) { throw 'Create the course prompt list at data\eval\prompts.txt first.' }
-.\.venv\Scripts\python.exe scripts\record_eval_clips.py --prompts data\eval\prompts.txt
+.\.venv\Scripts\python.exe scripts\eval\record_eval_clips.py --prompts data\eval\prompts.txt
 if (-not (Test-Path data\eval\manifest.csv)) { throw 'Recording must produce data\eval\manifest.csv before benchmarking.' }
-.\.venv\Scripts\python.exe scripts\asr_benchmark.py --manifest data\eval\manifest.csv --models base,small --group-by model,input_device,category
+.\.venv\Scripts\python.exe scripts\eval\asr_benchmark.py --manifest data\eval\manifest.csv --models base,small --group-by model,input_device,category
 ```
 
 After an interview and analysis, use the most recent session paths for grammar
@@ -204,9 +204,9 @@ if ($null -eq $session) { throw 'Run an interview first; no session JSON was fou
 $analyzedPath = Join-Path data\analysis ($session.BaseName + '.analyzed.json')
 if (-not (Test-Path $analyzedPath)) { throw 'Analyze the session before continuing.' }
 if (-not (Test-Path data\eval\grammar_cases.csv)) { throw 'Prepare labelled cases at data\eval\grammar_cases.csv first.' }
-.\.venv\Scripts\python.exe scripts\eval_grammar.py
-.\.venv\Scripts\python.exe scripts\review_grammar_flags.py $analyzedPath
-.\.venv\Scripts\python.exe scripts\make_rating_sheet.py $analyzedPath
+.\.venv\Scripts\python.exe scripts\eval\eval_grammar.py
+.\.venv\Scripts\python.exe scripts\eval\review_grammar_flags.py $analyzedPath
+.\.venv\Scripts\python.exe scripts\eval\make_rating_sheet.py $analyzedPath
 ```
 
 Complete the generated blind ratings CSV, then calculate content-score agreement
@@ -215,9 +215,9 @@ or repeat scoring for stability:
 ```powershell
 $ratings = Get-ChildItem data\eval\ratings -Filter '*.ratings.csv' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($null -eq $ratings) { throw 'Complete a generated rating sheet first.' }
-.\.venv\Scripts\python.exe scripts\eval_content.py $ratings.FullName $analyzedPath
+.\.venv\Scripts\python.exe scripts\eval\eval_content.py $ratings.FullName $analyzedPath
 .\.venv\Scripts\python.exe scripts\analyze_session.py $session.FullName --content --repeat 5 --out data\analysis\session_runs.json --force
-.\.venv\Scripts\python.exe scripts\content_stability.py data\analysis\session_runs.json
+.\.venv\Scripts\python.exe scripts\eval\content_stability.py data\analysis\session_runs.json
 ```
 
 Grammar case labels are by construction, not independent human gold labels.

@@ -10,7 +10,7 @@ from speaksure.speech_to_text import (
     describe_stt_configuration,
 )
 
-AUDIO_PATH = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "harvard.wav"
+AUDIO_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "harvard.wav"
 
 REFERENCE = (
     "The stale smell of old beer lingers. "

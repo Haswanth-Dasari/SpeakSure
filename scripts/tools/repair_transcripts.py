@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SESSIONS = PROJECT_ROOT / "data" / "sessions"
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "sessions_repaired"
 

@@ -6,7 +6,7 @@ reason is in `docs/results/e4_review_claims_verdicts_ai_annotator.csv`. A human 
 spot-check a sample (see `docs/EVALUATION.md`).
 
 Data: one interview (6 answers, resume-based, Quick length) with the review written
-by `openai/gpt-oss-120b`. 9 claims were checked with `scripts/review_narrative.py`.
+by `openai/gpt-oss-120b`. 9 claims were checked with `scripts/eval/review_narrative.py`.
 "Correct" means the claim is true of what was actually said or how it was said.
 
 ## Precision

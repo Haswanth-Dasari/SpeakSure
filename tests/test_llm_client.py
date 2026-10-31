@@ -216,7 +216,7 @@ def test_unknown_model_error_suggests_model_listing_without_leaking_key():
     with pytest.raises(LLMError, match="test-chat-model") as error:
         make_client(fake).complete(MESSAGES)
 
-    assert "scripts/llm_demo.py --list-models" in str(error.value)
+    assert "scripts/demos/llm_demo.py --list-models" in str(error.value)
     assert API_KEY not in str(error.value)
 
 

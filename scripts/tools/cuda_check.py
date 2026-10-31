@@ -1,7 +1,7 @@
 """Diagnose why CTranslate2 cannot load cublas64_12.dll on Windows.
 
 Run from the project root with the venv active:
-    python scripts/cuda_check.py
+    python scripts/tools/cuda_check.py
 
 It reports (A) where the NVIDIA DLLs are and whether other copies sit on PATH,
 (B) whether each DLL can be loaded and, if not, the exact Windows error, and

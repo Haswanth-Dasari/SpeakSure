@@ -1,7 +1,7 @@
 """Print each word's timing and the gap to the next word for one turn of a saved session.
 
 Usage (from the project root, venv active):
-    python scripts/show_word_gaps.py data/sessions/<file>.json <turn_number>
+    python scripts/tools/show_word_gaps.py data/sessions/<file>.json <turn_number>
 
 Purpose: check whether Whisper's word timestamps contain real silent gaps between
 words, or whether every word simply runs into the next one (which would hide pauses).

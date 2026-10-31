@@ -6,7 +6,7 @@ flagged sentence, not by a human. A human should spot-check a sample (see
 `docs/results/e2_grammar_verdicts_ai_annotator.csv` so it can be audited.
 
 Data: all 22 flags saved in 3 sessions (one speaker, 11 answer groups). Scored with
-`scripts/review_grammar_flags.py --score`. "Correct" means a real error a listener
+`scripts/eval/review_grammar_flags.py --score`. "Correct" means a real error a listener
 would notice.
 
 ## Precision

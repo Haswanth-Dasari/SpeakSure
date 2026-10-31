@@ -5,11 +5,11 @@ Purpose: find out WHY real-microphone transcription is worse than the clean
 Harvard sample, by changing one setting at a time on the SAME recording.
 
 Examples (run from the project root, venv active):
-    python scripts/mic_probe.py --seconds 15 --out data/probe/clip1.wav
-    python scripts/mic_probe.py --reuse data/probe/clip1.wav --language auto
-    python scripts/mic_probe.py --reuse data/probe/clip1.wav --language en
-    python scripts/mic_probe.py --reuse data/probe/clip1.wav --language en --model small
-    python scripts/mic_probe.py --reuse data/probe/clip1.wav --language en --hotwords "Pradeep, SpeakSure, Tirupati"
+    python scripts/tools/mic_probe.py --seconds 15 --out data/probe/clip1.wav
+    python scripts/tools/mic_probe.py --reuse data/probe/clip1.wav --language auto
+    python scripts/tools/mic_probe.py --reuse data/probe/clip1.wav --language en
+    python scripts/tools/mic_probe.py --reuse data/probe/clip1.wav --language en --model small
+    python scripts/tools/mic_probe.py --reuse data/probe/clip1.wav --language en --hotwords "Pradeep, SpeakSure, Tirupati"
 """
 
 import argparse
@@ -86,7 +86,7 @@ def main() -> None:
 
     # Reuse the app's own Windows CUDA setup (adds the NVIDIA pip packages' DLL
     # folders to this process's PATH). Without it, cublas64_12.dll is not found.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
     from speaksure.speech_to_text import _configure_windows_cuda_dlls
 
     _configure_windows_cuda_dlls()
