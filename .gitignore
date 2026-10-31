@@ -45,5 +45,3 @@ checkpoints/
 # Logs
 *.log
 speaksure_fixes_*.patch
-error-branch.diff
-speaksure_fixes_*.patch
