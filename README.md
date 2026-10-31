@@ -181,7 +181,7 @@ browser or printed.
 
 ## Evaluation toolkit
 
-A step-by-step guide to the four experiments (E1 to E4), with exact commands and what to record for the course report, is in [`docs/EVALUATION.md`](docs/EVALUATION.md). A draft report is in [`docs/COURSE_REPORT.md`](docs/COURSE_REPORT.md) and viva preparation is in [`docs/VIVA_QA.md`](docs/VIVA_QA.md).
+A step-by-step guide to the four experiments (E1 to E4), with exact commands and what to record for the course report, is in [`docs/technical/EVALUATION.md`](docs/technical/EVALUATION.md). A draft report is in [`docs/course/COURSE_REPORT.md`](docs/course/COURSE_REPORT.md) and viva preparation is in [`docs/course/VIVA_QA.md`](docs/course/VIVA_QA.md).
 
 Evaluation prompts, manifests, grammar cases, and collected clips are
 course-specific local files under the ignored `data/eval` directory and are
@@ -249,19 +249,30 @@ audio, model caches, and reports are ignored by Git.
 
 ```text
 src/speaksure/       Live interview, speech, analysis, web, and report modules
-scripts/             Runnable demos, interview entry points, and evaluation tools
+scripts/
+  demos/             Interactive and component demos
+  eval/              Evaluation and reporting tools
+  tools/             Audio, hardware, and transcript utilities
+  README.md          Purpose and example command for every script
+  analyze_session.py Analyze a saved interview session
+  live_interview.py  Run the terminal interview
+  make_report.py     Render an HTML report
+  run_web.py         Start the web application
 tests/               Automated tests; tests/fixtures/ holds the WAV test sample
 legacy/              Archived Streamlit prototype and its excluded tests
-docs/                Architecture notes and UI reference
+docs/
+  course/            Course report and viva preparation
+  technical/         Architecture, evaluation guide, and UI reference
+  results/           Evaluation results and supporting data
 data/                Ignored local session, evaluation, analysis, and report files
 models/              Ignored local voice/model weights
 requirements.txt     Pinned runtime dependencies
 requirements-dev.txt Runtime dependencies plus pytest and httpx
 ```
 
-See [scripts/README.md](scripts/README.md) for a purpose and example command for
-every script, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module
-map, schemas, data flow, and web API.
+See [scripts/README.md](scripts/README.md) for a purpose and example command
+for every script, and [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)
+for the module map, schemas, data flow, and web API.
 
 ## Licences and models
 

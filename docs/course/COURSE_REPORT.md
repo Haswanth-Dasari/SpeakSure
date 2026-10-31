@@ -2,7 +2,7 @@
 
 *Draft for the NLP course report. E2, E3 and E4 results were produced with an AI
 assistant as annotator and are marked provisional until you add a human spot-check
-(`docs/EVALUATION.md`). Nothing in this draft is a result unless a number is shown.*
+(`../technical/EVALUATION.md`). Nothing in this draft is a result unless a number is shown.*
 
 ## 1. Introduction
 
@@ -108,24 +108,24 @@ the same way as the independent ratings (Spearman 0.92, 95% bootstrap interval 0
 to 0.99), but they are systematically more generous: higher on all 10 answers, by
 11.3 points on average, with band agreement on 7 of 10. Clarity agreed least
 (rho 0.47). Repeated ratings of the same answer varied by 6.3 to 7.0 points, which
-supports reporting the median of three. Details: `docs/results/e3_content.md`.
+supports reporting the median of three. Details: `../results/e3_content.md`.
 
 ### 4.3 E2: rule-based grammar flags
 
 *Provisional: verdicts are from an AI assistant, with every verdict and reason
-auditable in `docs/results/`.*
+auditable in `../results/`.*
 
 Of 22 flags in 3 sessions, 1 was a real error, 1 was unsure and 20 were false alarms
 (precision 0.05; articles 0.10, subject-verb agreement 0.00). Causes were idioms
 ("from beginning to end"), mass nouns, parser confusion on spoken text and speech
 recognition errors blamed on the speaker. At least five clear errors went unflagged.
 A rule-based parser designed for written text therefore does not transfer to spoken
-transcripts, and the report hides it by default. Details: `docs/results/e2_grammar.md`.
+transcripts, and the report hides it by default. Details: `../results/e2_grammar.md`.
 
 ### 4.4 E4: written review accuracy
 
 *Provisional: one session, nine claims, verdicts from an AI assistant (auditable in
-`docs/results/`).*
+`../results/`).*
 
 Seven of nine claims were correct (0.78): language notes 2 of 3, strengths 2 of 3,
 improvements 3 of 3. The two errors were a natural sentence wrongly "corrected" and
@@ -134,7 +134,7 @@ often than the rule-based flags of E2 (0.67 versus 0.05). The check also exposed
 defects that were then fixed: a quote cut off mid-word was accepted, and the larger
 report-pass speech model sometimes lost a name the live model had right, so the live
 transcript is now kept for an answer when it contains more of the candidate's names
-and terms. Details: `docs/results/e4_review.md`.
+and terms. Details: `../results/e4_review.md`.
 
 ## 5. Limitations
 

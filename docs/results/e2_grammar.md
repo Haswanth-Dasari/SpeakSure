@@ -2,8 +2,8 @@
 
 **Read this first.** The verdicts were given by an AI assistant (Claude) reading each
 flagged sentence, not by a human. A human should spot-check a sample (see
-`docs/EVALUATION.md`). Every verdict and reason is in
-`docs/results/e2_grammar_verdicts_ai_annotator.csv` so it can be audited.
+`../technical/EVALUATION.md`). Every verdict and reason is in
+`e2_grammar_verdicts_ai_annotator.csv` so it can be audited.
 
 Data: all 22 flags saved in 3 sessions (one speaker, 11 answer groups). Scored with
 `scripts/eval/review_grammar_flags.py --score`. "Correct" means a real error a listener

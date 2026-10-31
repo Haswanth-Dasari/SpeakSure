@@ -2,8 +2,8 @@
 
 **Read this first.** The verdicts were given by an AI assistant (Claude), not a
 human, by checking each claim against the candidate's transcripts. Every verdict and
-reason is in `docs/results/e4_review_claims_verdicts_ai_annotator.csv`. A human should
-spot-check a sample (see `docs/EVALUATION.md`).
+reason is in `e4_review_claims_verdicts_ai_annotator.csv`. A human should
+spot-check a sample (see `../technical/EVALUATION.md`).
 
 Data: one interview (6 answers, resume-based, Quick length) with the review written
 by `openai/gpt-oss-120b`. 9 claims were checked with `scripts/eval/review_narrative.py`.

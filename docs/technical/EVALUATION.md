@@ -6,7 +6,7 @@ a small amount of human judgement, which only you can supply. Each takes about
 
 | Experiment | Question it answers | Data you create | Time |
 | --- | --- | --- | --- |
-| E1 Speech recognition | Which Whisper model should run live and for the report? | Done: `docs/results/e1_asr.md` | none |
+| E1 Speech recognition | Which Whisper model should run live and for the report? | Done: `../results/e1_asr.md` | none |
 | E2 Grammar checking | How often are the automatic grammar flags actually right? | Verdicts on flagged sentences | 30 min |
 | E3 Content scoring | Do the model's scores agree with a human, and how stable are they? | Your own ratings of answers | 60 min |
 | E4 Written review | Are the claims in the friendly review accurate? | Verdicts on review claims | 30 min |
@@ -97,8 +97,8 @@ the raw CSV files (without audio) so the numbers can be reproduced.
 
 E2 and E3 were completed on the three early sessions by an AI assistant acting as
 annotator (blind to model scores for E3). The results and every individual verdict
-are in `docs/results/`. To make them defensible as your own evidence, do a
-10-minute spot-check: open each of the two CSV files in `docs/results/`, pick 10 rows at random,
+are in `../results/`. To make them defensible as your own evidence, do a
+10-minute spot-check: open each of the two CSV files in `../results/`, pick 10 rows at random,
 and note whether you agree. Report the agreement rate next to the numbers
 (for example "9 of 10 verdicts confirmed"), and change any row you disagree with.
 

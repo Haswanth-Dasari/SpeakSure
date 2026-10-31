@@ -6,11 +6,11 @@ project's rubric and `make_rating_sheet.py`, before looking at any model score. 
 is a useful second opinion but **not** the human baseline the course may expect, and
 it is not fully independent of the scoring model (both are language models). Treat
 the numbers as provisional until a human spot-checks a sample (see
-`docs/EVALUATION.md`, "Spot-check").
+`../technical/EVALUATION.md`, "Spot-check").
 
 Data: 3 saved sessions, 11 answer groups (10 comparable; 1 excluded because the old
 strict parser left it unrated, a bug since fixed). One speaker. Raw ratings:
-`docs/results/e3_ratings_ai_annotator.csv`.
+`e3_ratings_ai_annotator.csv`.
 
 ## Agreement with the scoring model
 
