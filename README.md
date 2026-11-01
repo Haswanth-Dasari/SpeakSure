@@ -121,33 +121,33 @@ settings are for the optional OpenAI speech transcription backend or the
 archived prototype; the current live interviewer and content analysis use the
 Groq settings.
 
-| Environment variable | Default | Meaning |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | empty | Credential for the optional OpenAI STT provider and archived prototype. |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Chat model setting retained for the archived prototype. |
-| `OPENAI_TRANSCRIPTION_MODEL` | `whisper-1` | Model used when `SPEECH_TO_TEXT_PROVIDER=openai`. |
-| `GROQ_API_KEY` | empty | Enables the current Groq interviewer and optional content scoring. |
-| `LLM_MODEL` | `openai/gpt-oss-20b` | Groq model for live interviewer responses. |
-| `LLM_REASONING_EFFORT` | `low` | Groq interviewer reasoning effort: empty, low, medium, or high. |
-| `LLM_TIMEOUT_SECONDS` | `20` | Groq request timeout, from 1 to 120 seconds. |
-| `LLM_ANALYSIS_MODEL` | `openai/gpt-oss-120b` | Groq model used for content analysis. |
-| `LLM_ANALYSIS_REASONING_EFFORT` | `medium` | Groq content-analysis reasoning effort: empty, low, medium, or high. |
-| `SPEECH_TO_TEXT_PROVIDER` | `local` | `local` selects faster-whisper; `openai` sends audio to OpenAI. |
-| `SPEECH_TO_TEXT_MODEL_SIZE` | `base` | Local faster-whisper model size; `medium` is recommended for a 6 GB GPU if it fits. |
-| `SPEECH_TO_TEXT_DEVICE` | `auto` | Local inference device: `auto`, `cuda`, or `cpu`. |
-| `SPEECH_TO_TEXT_LANGUAGE` | `en` | Language code for local transcription. |
-| `SPEECH_TO_TEXT_VAD_FILTER` | `true` | Enable faster-whisper VAD filtering for local transcription. |
-| `SPEECH_TO_TEXT_HOTWORDS` | empty | Optional domain terms passed to local transcription. |
-| `SPEECH_TO_TEXT_INITIAL_PROMPT` | empty | Optional local transcription prompt, up to 300 characters. |
-| `REPORT_SPEECH_TO_TEXT_MODEL` | `large-v3` | Larger model that re-transcribes saved audio for the report (`off` disables; must differ from the live model). Loaded as `int8_float16` so it fits next to the live model on a 6 GB GPU. |
-| `CONTENT_RATING_SAMPLES` | `1` in code, `3` in `run_web.py` | How many times each question is rated; the median result is reported (1 to 5). |
-| `SHOW_RULE_GRAMMAR` | `1` in code, `0` in `run_web.py` | Set to `1` to show the rule-based grammar section in the report. |
-| `TEXT_TO_SPEECH_VOICE` | `en_US-lessac-medium` | Piper voice name. |
-| `TEXT_TO_SPEECH_MODELS_DIR` | `models/piper` | Directory containing Piper ONNX voice files. |
-| `TEXT_TO_SPEECH_LENGTH_SCALE` | `1.0` | Piper speaking-rate scale, from 0.5 to 2.0. |
-| `TEXT_TO_SPEECH_LEADING_SILENCE_SECONDS` | `0.15` | Silence added before synthesized audio, from 0 to 1 second. |
-| `TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS` | `0.5` | Silence added after synthesized audio, from 0 to 2 seconds. |
-| `PATH` | Windows process/system path | Used to locate CUDA DLLs; SpeakSure may prepend discovered package DLL folders to the Python process PATH, not the machine-wide PATH. |
+| Environment variable                      | Default                          | Meaning                                                                                                                                                                                  |
+| ----------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`                          | empty                            | Credential for the optional OpenAI STT provider and archived prototype.                                                                                                                  |
+| `OPENAI_MODEL`                            | `gpt-4o-mini`                    | Chat model setting retained for the archived prototype.                                                                                                                                  |
+| `OPENAI_TRANSCRIPTION_MODEL`              | `whisper-1`                      | Model used when `SPEECH_TO_TEXT_PROVIDER=openai`.                                                                                                                                        |
+| `GROQ_API_KEY`                            | empty                            | Enables the current Groq interviewer and optional content scoring.                                                                                                                       |
+| `LLM_MODEL`                               | `openai/gpt-oss-20b`             | Groq model for live interviewer responses.                                                                                                                                               |
+| `LLM_REASONING_EFFORT`                    | `low`                            | Groq interviewer reasoning effort: empty, low, medium, or high.                                                                                                                          |
+| `LLM_TIMEOUT_SECONDS`                     | `20`                             | Groq request timeout, from 1 to 120 seconds.                                                                                                                                             |
+| `LLM_ANALYSIS_MODEL`                      | `openai/gpt-oss-120b`            | Groq model used for content analysis.                                                                                                                                                    |
+| `LLM_ANALYSIS_REASONING_EFFORT`           | `medium`                         | Groq content-analysis reasoning effort: empty, low, medium, or high.                                                                                                                     |
+| `SPEECH_TO_TEXT_PROVIDER`                 | `local`                          | `local` selects faster-whisper; `openai` sends audio to OpenAI.                                                                                                                          |
+| `SPEECH_TO_TEXT_MODEL_SIZE`               | `base`                           | Local faster-whisper model size; `medium` is recommended for a 6 GB GPU if it fits.                                                                                                      |
+| `SPEECH_TO_TEXT_DEVICE`                   | `auto`                           | Local inference device: `auto`, `cuda`, or `cpu`.                                                                                                                                        |
+| `SPEECH_TO_TEXT_LANGUAGE`                 | `en`                             | Language code for local transcription.                                                                                                                                                   |
+| `SPEECH_TO_TEXT_VAD_FILTER`               | `true`                           | Enable faster-whisper VAD filtering for local transcription.                                                                                                                             |
+| `SPEECH_TO_TEXT_HOTWORDS`                 | empty                            | Optional domain terms passed to local transcription.                                                                                                                                     |
+| `SPEECH_TO_TEXT_INITIAL_PROMPT`           | empty                            | Optional local transcription prompt, up to 300 characters.                                                                                                                               |
+| `REPORT_SPEECH_TO_TEXT_MODEL`             | `large-v3`                       | Larger model that re-transcribes saved audio for the report (`off` disables; must differ from the live model). Loaded as `int8_float16` so it fits next to the live model on a 6 GB GPU. |
+| `CONTENT_RATING_SAMPLES`                  | `1` in code, `3` in `run_web.py` | How many times each question is rated; the median result is reported (1 to 5).                                                                                                           |
+| `SHOW_RULE_GRAMMAR`                       | `1` in code, `0` in `run_web.py` | Set to `1` to show the rule-based grammar section in the report.                                                                                                                         |
+| `TEXT_TO_SPEECH_VOICE`                    | `en_US-lessac-medium`            | Piper voice name.                                                                                                                                                                        |
+| `TEXT_TO_SPEECH_MODELS_DIR`               | `models/piper`                   | Directory containing Piper ONNX voice files.                                                                                                                                             |
+| `TEXT_TO_SPEECH_LENGTH_SCALE`             | `1.0`                            | Piper speaking-rate scale, from 0.5 to 2.0.                                                                                                                                              |
+| `TEXT_TO_SPEECH_LEADING_SILENCE_SECONDS`  | `0.15`                           | Silence added before synthesized audio, from 0 to 1 second.                                                                                                                              |
+| `TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS` | `0.5`                            | Silence added after synthesized audio, from 0 to 2 seconds.                                                                                                                              |
+| `PATH`                                    | Windows process/system path      | Used to locate CUDA DLLs; SpeakSure may prepend discovered package DLL folders to the Python process PATH, not the machine-wide PATH.                                                    |
 
 ## Run the web interview
 
@@ -344,16 +344,3 @@ third-party assets remain subject to their own upstream terms.
 - spaCy model package: <https://spacy.io/models/en>
 - faster-whisper licence: <https://github.com/SYSTRAN/faster-whisper/blob/master/LICENSE>
 - Whisper licence: <https://github.com/openai/whisper/blob/main/LICENSE>
-
-## Use of AI assistance
-
-_Student: check this draft against your course policy and edit it so that it
-describes exactly what you did._
-
-This project was designed and built with the help of AI assistants (chat models
-for planning, review and code, and coding agents inside the editor). The author
-chose the scope and design decisions, ran all code, recorded the audio, supplied
-the evaluation data, and checked results against real output. Generated code was
-verified by running the automated tests and real interviews, and by reading the
-saved sessions. The E2 to E4 annotations in `docs/results/` were produced by an AI
-assistant and are marked as provisional until spot-checked by the author.
