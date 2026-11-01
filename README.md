@@ -1,17 +1,21 @@
 # SpeakSure
 
 SpeakSure is a local-first, voice-first interview coach for practising spoken
-job interviews. It listens to a candidate, transcribes each answer with local
-speech recognition by default, generates an interviewer response, speaks it
-with Piper, and saves an analyzable session and feedback report.
+job interviews. It asks questions aloud, listens, decides when an answer has
+ended, transcribes it with local speech recognition, replies with a follow-up
+or the next question, and finishes with a feedback report that opens with a
+plain-language review and then shows the evidence. It can tailor questions to
+the candidate's own resume.
 
 ## Table of contents
 
+- [What it does](#what-it-does)
 - [Demo flow](#demo-flow)
 - [Architecture overview](#architecture-overview)
 - [Windows PowerShell setup](#windows-powershell-setup)
 - [Configuration](#configuration)
 - [Run the web interview](#run-the-web-interview)
+- [Resume-based interviews](#resume-based-interviews)
 - [Run the terminal interview](#run-the-terminal-interview)
 - [Analyze a session](#analyze-a-session)
 - [Generate a report](#generate-a-report)
@@ -20,7 +24,26 @@ with Piper, and saves an analyzable session and feedback report.
 - [Limitations](#limitations)
 - [Project structure](#project-structure)
 - [Licences and models](#licences-and-models)
+- [Documentation](#documentation)
 - [Use of AI assistance](#use-of-ai-assistance)
+
+## What it does
+
+- **Spoken interview in the browser or terminal.** Local Whisper transcription,
+  local Piper voice, and an interviewer language model (Groq free tier).
+- **Resume-aware.** Upload a PDF, DOCX or TXT resume; contact details are removed
+  before anything is sent to a model; you review the extracted profile; resume
+  questions are mixed with a varied pool of general ones.
+- **Natural conversation.** Follow-ups build on what you said, never assume
+  something you denied, and the question order differs every time.
+- **Accurate transcripts.** A fast model runs live; a larger model re-transcribes
+  the saved audio for the report, with your names and resume terms as hints.
+- **A report that reads like a friend.** A short review comes first (what went
+  well, what to work on, language notes with rewrites, a practice plan), followed
+  by the evidence: scores, delivery measurements and transcripts.
+- **Honest evaluation.** Measured speech-model choice (E1), content-scoring
+  agreement (E3), grammar-flag precision (E2) and review accuracy (E4); see
+  [docs/results](docs/results).
 
 ## Demo flow
 
@@ -35,23 +58,31 @@ session JSON and audio locally. At the end, analysis can produce an HTML report.
 ## Architecture overview
 
 ```text
-Browser capture ─┐
-                 ├─> CapturedAnswer/WAV ─> local STT ─> shared turn processor
-Terminal capture ┘                                  │
-                                                    ├─> interviewer / Groq LLM
-                                                    ├─> Piper TTS ─> interviewer audio
-                                                    └─> session JSON + local WAV
-                                                               │
-                                      fluency / grammar / transcript-quality /
-                                      audio-delivery / optional content analysis
-                                                               │
-                                                     standalone HTML report
+Resume (optional) ─> local text extraction ─> contact details removed ─> verified profile
+                                                                              │ (you review it)
+                                                                              ▼
+                                         varied question plan  ◄── question pool (16) + resume questions
+                                                  │
+Browser capture ─┐                                ▼
+                 ├─> WAV ─> live STT (medium) ─> interviewer LLM ─> Piper voice ─> next question
+Terminal capture ┘                │
+                                  └─> session JSON + local audio
+                                              │
+                    large-v3 re-transcription (kept per answer only if better)
+                                              │
+              fluency / audio-delivery / transcript-quality / content scoring (median of 3)
+                                              │
+                          written review (verified quotes) + evidence ─> standalone HTML report
 ```
 
 The browser and terminal use the same `process_interview_turn` path. Offline
-analyzers produce delivery, fluency, grammar, and transcript-confidence
-measures. When enabled, content scoring uses a language model and per-question
-rubrics. The HTML report combines these results without requiring a hosted UI.
+analyzers produce delivery, fluency and transcript-confidence measures. When
+enabled, content scoring uses a language model and per-question rubrics, and a
+written review is generated from the computed facts with every quote and number
+validated. The rule-based grammar check is still computed and saved, but its
+section is hidden from the report by default because it was mostly false alarms
+on spoken text (see [docs/results/e2_grammar.md](docs/results/e2_grammar.md)).
+The HTML report needs no hosted UI.
 
 ## Windows PowerShell setup
 
@@ -108,6 +139,9 @@ Groq settings.
 | `SPEECH_TO_TEXT_VAD_FILTER` | `true` | Enable faster-whisper VAD filtering for local transcription. |
 | `SPEECH_TO_TEXT_HOTWORDS` | empty | Optional domain terms passed to local transcription. |
 | `SPEECH_TO_TEXT_INITIAL_PROMPT` | empty | Optional local transcription prompt, up to 300 characters. |
+| `REPORT_SPEECH_TO_TEXT_MODEL` | `large-v3` | Larger model that re-transcribes saved audio for the report (`off` disables; must differ from the live model). Loaded as `int8_float16` so it fits next to the live model on a 6 GB GPU. |
+| `CONTENT_RATING_SAMPLES` | `1` in code, `3` in `run_web.py` | How many times each question is rated; the median result is reported (1 to 5). |
+| `SHOW_RULE_GRAMMAR` | `1` in code, `0` in `run_web.py` | Set to `1` to show the rule-based grammar section in the report. |
 | `TEXT_TO_SPEECH_VOICE` | `en_US-lessac-medium` | Piper voice name. |
 | `TEXT_TO_SPEECH_MODELS_DIR` | `models/piper` | Directory containing Piper ONNX voice files. |
 | `TEXT_TO_SPEECH_LENGTH_SCALE` | `1.0` | Piper speaking-rate scale, from 0.5 to 2.0. |
@@ -127,6 +161,16 @@ The setup screen reports model readiness. Grant microphone access, test the
 selected input, and join the room. Camera preview is optional and is never
 uploaded or stored. Captions are off by default. When the interview ends, the
 room prepares the feedback and displays the report in an embedded frame.
+
+## Resume-based interviews
+
+On the setup screen, choose a PDF, DOCX or TXT resume and click **Analyse**
+(PDF support needs `pypdf`, listed in `requirements.txt`). The resume is read on
+your computer; emails, phone numbers and links are removed before any text goes
+to the language model, and only the short profile shown under "Check what the
+interviewer will use" is kept with the session. Edit or delete anything, then
+join. Project names, tools and institutions from the profile are also added to
+the speech recogniser's vocabulary.
 
 ## Run the terminal interview
 
@@ -274,6 +318,13 @@ See [scripts/README.md](scripts/README.md) for a purpose and example command
 for every script, and [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)
 for the module map, schemas, data flow, and web API.
 
+## Documentation
+
+Start at [docs/README.md](docs/README.md). See [scripts/README.md](scripts/README.md)
+for a purpose and example command for every script, and
+[docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md) for the module map,
+schemas, data flow, and web API. Project history is in [CHANGELOG.md](CHANGELOG.md).
+
 ## Licences and models
 
 The Piper engine and the Piper voice collection repository declare MIT
@@ -296,5 +347,13 @@ third-party assets remain subject to their own upstream terms.
 
 ## Use of AI assistance
 
-_Student: complete this section with the AI tools used, the tasks they assisted
-with, and how generated code or explanations were reviewed and validated._
+_Student: check this draft against your course policy and edit it so that it
+describes exactly what you did._
+
+This project was designed and built with the help of AI assistants (chat models
+for planning, review and code, and coding agents inside the editor). The author
+chose the scope and design decisions, ran all code, recorded the audio, supplied
+the evaluation data, and checked results against real output. Generated code was
+verified by running the automated tests and real interviews, and by reading the
+saved sessions. The E2 to E4 annotations in `docs/results/` were produced by an AI
+assistant and are marked as provisional until spot-checked by the author.

@@ -1,10 +1,14 @@
+import sys
 import time
 import wave
 from pathlib import Path
 from statistics import median
 
-from jiwer import wer
-from speaksure.speech_to_text import (
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from jiwer import wer  # noqa: E402
+from speaksure.speech_to_text import (  # noqa: E402
     LocalSpeechToTextProvider,
     LocalTranscriptionConfig,
     describe_stt_configuration,

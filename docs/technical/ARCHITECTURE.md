@@ -10,7 +10,11 @@ additional per-version metadata where the schema permits arbitrary mappings.
 - `src/speaksure/audio_capture.py` — microphone capture, VAD, WAV serialization, and capture timings.
 - `src/speaksure/speech_to_text.py` — local faster-whisper and optional OpenAI transcription providers.
 - `src/speaksure/text_to_speech.py` — local Piper configuration, synthesis, and playback.
-- `src/speaksure/question_bank.py` — typed interview questions and question selection.
+- `src/speaksure/question_bank.py` — typed interview questions, selection, and per-session custom questions (`bank_for_session`).
+- `src/speaksure/interview_planner.py` — varied, realistic question plans (question pool, shuffled order, openers).
+- `src/speaksure/resume.py` — local resume text extraction, contact redaction, verified candidate profile, speech-vocabulary hints.
+- `src/speaksure/resume_questions.py` — resume-based question generation with template fallback and plan mixing.
+- `src/speaksure/retranscribe.py` — second, larger-model transcription pass for the report, with safety rules.
 - `src/speaksure/interviewer_prompts.py` — interviewer system and response prompt text.
 - `src/speaksure/interviewer.py` — interview plan, turn selection, follow-up, and finish state.
 - `src/speaksure/llm_client.py` — provider-neutral LLM protocol and Groq client.
@@ -33,6 +37,8 @@ additional per-version metadata where the schema permits arbitrary mappings.
 - `src/speaksure/report/aggregate.py` — groups delivery measurements for report charts.
 - `src/speaksure/report/charts.py` — self-contained SVG chart generation.
 - `src/speaksure/report/coaching.py` — selects report findings from analysis results.
+- `src/speaksure/report/narrative.py` — written review: facts, prompt, strict validation (verified quotes and numbers), HTML.
+- `src/speaksure/report/options.py` — report display options (hide the rule-based grammar section) without changing saved analysis.
 - `src/speaksure/report/render.py` — escaped, standalone HTML feedback report renderer.
 - `src/speaksure/web/__init__.py` — web package marker.
 - `src/speaksure/web/app.py` — FastAPI routes, model warmup, turn processing, and report lifecycle.
@@ -126,6 +132,19 @@ All routes are served by the local FastAPI application. Error responses use
 | `PATCH /api/sessions/{id}/turns/{turn_index}/timing` | Headers `X-Client-Upload-Ms` and `X-Client-End-Wait-Ms`; both finite, non-negative milliseconds. | `{"status": "saved"}`. |
 | `GET /report/{id}` | — | Generated standalone HTML report, once ready. |
 | `GET /api/sessions` | — | Recent session summaries and report links where available. |
+
+## Resume, planning and report additions
+
+| Area | Contract |
+| --- | --- |
+| `POST /api/resume` | Raw file body with `X-Filename`; returns `{profile, info, warning}`. `info` has redaction counts and dropped unverified items. Never stores the resume text. |
+| `POST /api/sessions` | Accepts optional `resume_profile` (validated, capped lists). Plans questions with `plan_realistic`. |
+| Session `metadata` | `custom_questions` (non-built-in questions with rubric hints), `resume_used`, `resume_profile`, `vocabulary_hints` (user hints first, then distinctive resume terms), `report_stt_model` (when the report pass was used). |
+| Turn `analysis.transcript_passes` | `live_model`, `report_model`, `live_text`, `used` (`live` or `report`), `reason`, `report_pass_seconds`. |
+| Analysis `narrative` | Validated written review: `headline`, `overview`, `went_well`, `work_on`, `language`, `practice_plan`, `per_question`, `model`. Absent if generation failed. |
+| Analysis `rule_grammar_hidden` | Present only in the report copy when the rule-based grammar section is hidden. |
+| Content results | With several samples, `content_score_samples` and `content_score_spread` accompany the median result. |
+| Environment | `REPORT_SPEECH_TO_TEXT_MODEL`, `CONTENT_RATING_SAMPLES`, `SHOW_RULE_GRAMMAR` (see the README configuration table). |
 
 ## Timing interpretation
 

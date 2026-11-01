@@ -1,0 +1,323 @@
+diff --git a/.env.example b/.env.example
+index a6cfbd2..60093cf 100644
+--- a/.env.example
++++ b/.env.example
+@@ -26,3 +26,5 @@ TEXT_TO_SPEECH_TRAILING_SILENCE_SECONDS=0.5
+ REPORT_SPEECH_TO_TEXT_MODEL=large-v3
+ # Rate each answer several times and report the median (reduces score noise).
+ CONTENT_RATING_SAMPLES=3
++# Show the rule-based grammar section in the report (off by default: mostly false alarms on speech).
++SHOW_RULE_GRAMMAR=0
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 0000000..6455df1
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,27 @@
++# Changelog
++
++## 1.0.0 — live spoken interview coach
++
++- Browser and terminal spoken interviews with local Whisper and Piper and a Groq
++  interviewer; end-of-answer detection with noise calibration.
++- Resume upload with local text extraction, contact redaction, grounded profile
++  and an editable review panel; resume questions with rubric hints.
++- Varied question planner (pool of 16, shuffled order, varied openers), follow-ups
++  that never assume a denied experience, deeper follow-ups on projects.
++- Two-pass transcription: medium live, large-v3 for the report, per-answer guard
++  that keeps the live text when it holds more of the candidate's names and terms.
++- Content scoring by rubric with a lenient repair step and median of three ratings.
++- Report that opens with a written review (verified quotes and numbers) followed by
++  the evidence; rule-based grammar section hidden by default (precision about 5%).
++- Evaluation toolkit and results: E1 speech models, E2 grammar flags, E3 content
++  scoring agreement, E4 review accuracy (E2 to E4 annotated by an AI assistant).
++- Repository reorganised: scripts grouped into demos, eval and tools; documentation
++  grouped into technical, course and results.
++- Bug fixes found along the way: browser typos that blocked joining and recording,
++  voice-detector sample-rate and calibration errors, thinking-time measurement,
++  concurrent model loading, report-model GPU memory, quote truncation.
++
++## 0.5.0 — Streamlit prototype
++
++- Text-first prototype (record, transcribe, edit, submit) with OpenAI follow-ups.
++  Archived in `legacy/`.
+diff --git a/README.md b/README.md
+index 8b94eb8..45de9e9 100644
+--- a/README.md
++++ b/README.md
+@@ -1,17 +1,21 @@
+ # SpeakSure
+ 
+ SpeakSure is a local-first, voice-first interview coach for practising spoken
+-job interviews. It listens to a candidate, transcribes each answer with local
+-speech recognition by default, generates an interviewer response, speaks it
+-with Piper, and saves an analyzable session and feedback report.
++job interviews. It asks questions aloud, listens, decides when an answer has
++ended, transcribes it with local speech recognition, replies with a follow-up
++or the next question, and finishes with a feedback report that opens with a
++plain-language review and then shows the evidence. It can tailor questions to
++the candidate's own resume.
+ 
+ ## Table of contents
+ 
++- [What it does](#what-it-does)
+ - [Demo flow](#demo-flow)
+ - [Architecture overview](#architecture-overview)
+ - [Windows PowerShell setup](#windows-powershell-setup)
+ - [Configuration](#configuration)
+ - [Run the web interview](#run-the-web-interview)
++- [Resume-based interviews](#resume-based-interviews)
+ - [Run the terminal interview](#run-the-terminal-interview)
+ - [Analyze a session](#analyze-a-session)
+ - [Generate a report](#generate-a-report)
+@@ -20,8 +24,27 @@ with Piper, and saves an analyzable session and feedback report.
+ - [Limitations](#limitations)
+ - [Project structure](#project-structure)
+ - [Licences and models](#licences-and-models)
++- [Documentation](#documentation)
+ - [Use of AI assistance](#use-of-ai-assistance)
+ 
++## What it does
++
++- **Spoken interview in the browser or terminal.** Local Whisper transcription,
++  local Piper voice, and an interviewer language model (Groq free tier).
++- **Resume-aware.** Upload a PDF, DOCX or TXT resume; contact details are removed
++  before anything is sent to a model; you review the extracted profile; resume
++  questions are mixed with a varied pool of general ones.
++- **Natural conversation.** Follow-ups build on what you said, never assume
++  something you denied, and the question order differs every time.
++- **Accurate transcripts.** A fast model runs live; a larger model re-transcribes
++  the saved audio for the report, with your names and resume terms as hints.
++- **A report that reads like a friend.** A short review comes first (what went
++  well, what to work on, language notes with rewrites, a practice plan), followed
++  by the evidence: scores, delivery measurements and transcripts.
++- **Honest evaluation.** Measured speech-model choice (E1), content-scoring
++  agreement (E3), grammar-flag precision (E2) and review accuracy (E4); see
++  [docs/results](docs/results).
++
+ ## Demo flow
+ 
+ In the **terminal flow**, the candidate chooses a role and question count, then
+@@ -35,23 +58,31 @@ session JSON and audio locally. At the end, analysis can produce an HTML report.
+ ## Architecture overview
+ 
+ ```text
+-Browser capture ─┐
+-                 ├─> CapturedAnswer/WAV ─> local STT ─> shared turn processor
+-Terminal capture ┘                                  │
+-                                                    ├─> interviewer / Groq LLM
+-                                                    ├─> Piper TTS ─> interviewer audio
+-                                                    └─> session JSON + local WAV
+-                                                               │
+-                                      fluency / grammar / transcript-quality /
+-                                      audio-delivery / optional content analysis
+-                                                               │
+-                                                     standalone HTML report
++Resume (optional) ─> local text extraction ─> contact details removed ─> verified profile
++                                                                              │ (you review it)
++                                                                              ▼
++                                         varied question plan  ◄── question pool (16) + resume questions
++                                                  │
++Browser capture ─┐                                ▼
++                 ├─> WAV ─> live STT (medium) ─> interviewer LLM ─> Piper voice ─> next question
++Terminal capture ┘                │
++                                  └─> session JSON + local audio
++                                              │
++                    large-v3 re-transcription (kept per answer only if better)
++                                              │
++              fluency / audio-delivery / transcript-quality / content scoring (median of 3)
++                                              │
++                          written review (verified quotes) + evidence ─> standalone HTML report
+ ```
+ 
+ The browser and terminal use the same `process_interview_turn` path. Offline
+-analyzers produce delivery, fluency, grammar, and transcript-confidence
+-measures. When enabled, content scoring uses a language model and per-question
+-rubrics. The HTML report combines these results without requiring a hosted UI.
++analyzers produce delivery, fluency and transcript-confidence measures. When
++enabled, content scoring uses a language model and per-question rubrics, and a
++written review is generated from the computed facts with every quote and number
++validated. The rule-based grammar check is still computed and saved, but its
++section is hidden from the report by default because it was mostly false alarms
++on spoken text (see [docs/results/e2_grammar.md](docs/results/e2_grammar.md)).
++The HTML report needs no hosted UI.
+ 
+ ## Windows PowerShell setup
+ 
+@@ -108,6 +139,9 @@ Groq settings.
+ | `SPEECH_TO_TEXT_VAD_FILTER` | `true` | Enable faster-whisper VAD filtering for local transcription. |
+ | `SPEECH_TO_TEXT_HOTWORDS` | empty | Optional domain terms passed to local transcription. |
+ | `SPEECH_TO_TEXT_INITIAL_PROMPT` | empty | Optional local transcription prompt, up to 300 characters. |
++| `REPORT_SPEECH_TO_TEXT_MODEL` | `large-v3` | Larger model that re-transcribes saved audio for the report (`off` disables; must differ from the live model). Loaded as `int8_float16` so it fits next to the live model on a 6 GB GPU. |
++| `CONTENT_RATING_SAMPLES` | `1` in code, `3` in `run_web.py` | How many times each question is rated; the median result is reported (1 to 5). |
++| `SHOW_RULE_GRAMMAR` | `1` in code, `0` in `run_web.py` | Set to `1` to show the rule-based grammar section in the report. |
+ | `TEXT_TO_SPEECH_VOICE` | `en_US-lessac-medium` | Piper voice name. |
+ | `TEXT_TO_SPEECH_MODELS_DIR` | `models/piper` | Directory containing Piper ONNX voice files. |
+ | `TEXT_TO_SPEECH_LENGTH_SCALE` | `1.0` | Piper speaking-rate scale, from 0.5 to 2.0. |
+@@ -128,6 +162,16 @@ selected input, and join the room. Camera preview is optional and is never
+ uploaded or stored. Captions are off by default. When the interview ends, the
+ room prepares the feedback and displays the report in an embedded frame.
+ 
++## Resume-based interviews
++
++On the setup screen, choose a PDF, DOCX or TXT resume and click **Analyse**
++(PDF support needs `pypdf`, listed in `requirements.txt`). The resume is read on
++your computer; emails, phone numbers and links are removed before any text goes
++to the language model, and only the short profile shown under "Check what the
++interviewer will use" is kept with the session. Edit or delete anything, then
++join. Project names, tools and institutions from the profile are also added to
++the speech recogniser's vocabulary.
++
+ ## Run the terminal interview
+ 
+ The terminal loop requires a microphone and output device, a working Piper
+@@ -274,6 +318,13 @@ See [scripts/README.md](scripts/README.md) for a purpose and example command
+ for every script, and [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)
+ for the module map, schemas, data flow, and web API.
+ 
++## Documentation
++
++Start at [docs/README.md](docs/README.md). See [scripts/README.md](scripts/README.md)
++for a purpose and example command for every script, and
++[docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md) for the module map,
++schemas, data flow, and web API. Project history is in [CHANGELOG.md](CHANGELOG.md).
++
+ ## Licences and models
+ 
+ The Piper engine and the Piper voice collection repository declare MIT
+@@ -296,5 +347,13 @@ third-party assets remain subject to their own upstream terms.
+ 
+ ## Use of AI assistance
+ 
+-_Student: complete this section with the AI tools used, the tasks they assisted
+-with, and how generated code or explanations were reviewed and validated._
++_Student: check this draft against your course policy and edit it so that it
++describes exactly what you did._
++
++This project was designed and built with the help of AI assistants (chat models
++for planning, review and code, and coding agents inside the editor). The author
++chose the scope and design decisions, ran all code, recorded the audio, supplied
++the evaluation data, and checked results against real output. Generated code was
++verified by running the automated tests and real interviews, and by reading the
++saved sessions. The E2 to E4 annotations in `docs/results/` were produced by an AI
++assistant and are marked as provisional until spot-checked by the author.
+diff --git a/docs/README.md b/docs/README.md
+new file mode 100644
+index 0000000..5cef04f
+--- /dev/null
++++ b/docs/README.md
+@@ -0,0 +1,13 @@
++# Documentation index
++
++| Document | What it is for |
++| --- | --- |
++| [technical/ARCHITECTURE.md](technical/ARCHITECTURE.md) | Module map, data flow, session and analysis schemas, web API, resume and report additions |
++| [technical/EVALUATION.md](technical/EVALUATION.md) | Step-by-step guide to experiments E1 to E4, with commands and what to record |
++| [technical/ui_mockup.html](technical/ui_mockup.html) | Early interface mock-up (reference only) |
++| [course/COURSE_REPORT.md](course/COURSE_REPORT.md) | Draft course report with real results |
++| [course/VIVA_QA.md](course/VIVA_QA.md) | Questions to prepare for the viva, with the points to make |
++| [results/](results/) | E1 to E4 results and the annotation files behind them |
++
++Related: [../README.md](../README.md) (setup and usage), [../scripts/README.md](../scripts/README.md)
++(every script), [../CHANGELOG.md](../CHANGELOG.md) (project history).
+diff --git a/docs/technical/ARCHITECTURE.md b/docs/technical/ARCHITECTURE.md
+index e9b7999..29b02d5 100644
+--- a/docs/technical/ARCHITECTURE.md
++++ b/docs/technical/ARCHITECTURE.md
+@@ -10,7 +10,11 @@ additional per-version metadata where the schema permits arbitrary mappings.
+ - `src/speaksure/audio_capture.py` — microphone capture, VAD, WAV serialization, and capture timings.
+ - `src/speaksure/speech_to_text.py` — local faster-whisper and optional OpenAI transcription providers.
+ - `src/speaksure/text_to_speech.py` — local Piper configuration, synthesis, and playback.
+-- `src/speaksure/question_bank.py` — typed interview questions and question selection.
++- `src/speaksure/question_bank.py` — typed interview questions, selection, and per-session custom questions (`bank_for_session`).
++- `src/speaksure/interview_planner.py` — varied, realistic question plans (question pool, shuffled order, openers).
++- `src/speaksure/resume.py` — local resume text extraction, contact redaction, verified candidate profile, speech-vocabulary hints.
++- `src/speaksure/resume_questions.py` — resume-based question generation with template fallback and plan mixing.
++- `src/speaksure/retranscribe.py` — second, larger-model transcription pass for the report, with safety rules.
+ - `src/speaksure/interviewer_prompts.py` — interviewer system and response prompt text.
+ - `src/speaksure/interviewer.py` — interview plan, turn selection, follow-up, and finish state.
+ - `src/speaksure/llm_client.py` — provider-neutral LLM protocol and Groq client.
+@@ -33,6 +37,8 @@ additional per-version metadata where the schema permits arbitrary mappings.
+ - `src/speaksure/report/aggregate.py` — groups delivery measurements for report charts.
+ - `src/speaksure/report/charts.py` — self-contained SVG chart generation.
+ - `src/speaksure/report/coaching.py` — selects report findings from analysis results.
++- `src/speaksure/report/narrative.py` — written review: facts, prompt, strict validation (verified quotes and numbers), HTML.
++- `src/speaksure/report/options.py` — report display options (hide the rule-based grammar section) without changing saved analysis.
+ - `src/speaksure/report/render.py` — escaped, standalone HTML feedback report renderer.
+ - `src/speaksure/web/__init__.py` — web package marker.
+ - `src/speaksure/web/app.py` — FastAPI routes, model warmup, turn processing, and report lifecycle.
+@@ -127,6 +133,19 @@ All routes are served by the local FastAPI application. Error responses use
+ | `GET /report/{id}` | — | Generated standalone HTML report, once ready. |
+ | `GET /api/sessions` | — | Recent session summaries and report links where available. |
+ 
++## Resume, planning and report additions
++
++| Area | Contract |
++| --- | --- |
++| `POST /api/resume` | Raw file body with `X-Filename`; returns `{profile, info, warning}`. `info` has redaction counts and dropped unverified items. Never stores the resume text. |
++| `POST /api/sessions` | Accepts optional `resume_profile` (validated, capped lists). Plans questions with `plan_realistic`. |
++| Session `metadata` | `custom_questions` (non-built-in questions with rubric hints), `resume_used`, `resume_profile`, `vocabulary_hints` (user hints first, then distinctive resume terms), `report_stt_model` (when the report pass was used). |
++| Turn `analysis.transcript_passes` | `live_model`, `report_model`, `live_text`, `used` (`live` or `report`), `reason`, `report_pass_seconds`. |
++| Analysis `narrative` | Validated written review: `headline`, `overview`, `went_well`, `work_on`, `language`, `practice_plan`, `per_question`, `model`. Absent if generation failed. |
++| Analysis `rule_grammar_hidden` | Present only in the report copy when the rule-based grammar section is hidden. |
++| Content results | With several samples, `content_score_samples` and `content_score_spread` accompany the median result. |
++| Environment | `REPORT_SPEECH_TO_TEXT_MODEL`, `CONTENT_RATING_SAMPLES`, `SHOW_RULE_GRAMMAR` (see the README configuration table). |
++
+ ## Timing interpretation
+ 
+ The terminal capture records end wait from the final voiced frame to the VAD
+diff --git a/scripts/eval/evaluate_stt.py b/scripts/eval/evaluate_stt.py
+index 404c65f..5d412f8 100644
+--- a/scripts/eval/evaluate_stt.py
++++ b/scripts/eval/evaluate_stt.py
+@@ -1,10 +1,14 @@
++import sys
+ import time
+ import wave
+ from pathlib import Path
+ from statistics import median
+ 
+-from jiwer import wer
+-from speaksure.speech_to_text import (
++PROJECT_ROOT = Path(__file__).resolve().parents[2]
++sys.path.insert(0, str(PROJECT_ROOT / "src"))
++
++from jiwer import wer  # noqa: E402
++from speaksure.speech_to_text import (  # noqa: E402
+     LocalSpeechToTextProvider,
+     LocalTranscriptionConfig,
+     describe_stt_configuration,
+diff --git a/tests/test_evaluation_toolkit.py b/tests/test_evaluation_toolkit.py
+index b2cd2a9..ad971f3 100644
+--- a/tests/test_evaluation_toolkit.py
++++ b/tests/test_evaluation_toolkit.py
+@@ -214,6 +214,8 @@ def test_span_mismatch_counts_as_false_positive_and_false_negative():
+ 
+ def test_grammar_cases_have_five_each_and_at_least_80_rows():
+     path = Path("data/eval/grammar_cases.csv")
++    if not path.exists():
++        pytest.skip("data/eval/grammar_cases.csv is local course data and is not in the repository")
+     with path.open("r", encoding="utf-8") as source:
+         lines = [line for line in source if not line.startswith("#")]
+     rows = list(csv.DictReader(lines))
+diff --git a/tests/test_record_eval_clips.py b/tests/test_record_eval_clips.py
+index 956b37a..19b10d4 100644
+--- a/tests/test_record_eval_clips.py
++++ b/tests/test_record_eval_clips.py
+@@ -4,6 +4,7 @@ import csv
+ from pathlib import Path
+ 
+ import numpy as np
++import pytest
+ 
+ from scripts.eval.record_eval_clips import (
+     _review_reference,
+@@ -92,6 +93,8 @@ def test_reference_review_can_correct_what_was_actually_said():
+ 
+ def test_example_prompts_have_requested_categories_and_word_counts():
+     prompt_path = Path(__file__).resolve().parents[1] / "data" / "eval" / "prompts.example.txt"
++    if not prompt_path.exists():
++        pytest.skip("data/eval/prompts.example.txt is local course data and is not in the repository")
+     prompts = [
+         parse_prompt_line(line)
+         for line in prompt_path.read_text(encoding="utf-8").splitlines()

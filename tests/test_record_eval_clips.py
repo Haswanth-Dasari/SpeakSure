@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from scripts.eval.record_eval_clips import (
     _review_reference,
@@ -92,6 +93,8 @@ def test_reference_review_can_correct_what_was_actually_said():
 
 def test_example_prompts_have_requested_categories_and_word_counts():
     prompt_path = Path(__file__).resolve().parents[1] / "data" / "eval" / "prompts.example.txt"
+    if not prompt_path.exists():
+        pytest.skip("data/eval/prompts.example.txt is local course data and is not in the repository")
     prompts = [
         parse_prompt_line(line)
         for line in prompt_path.read_text(encoding="utf-8").splitlines()
