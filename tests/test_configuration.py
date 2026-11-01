@@ -146,7 +146,7 @@ def test_stt_configuration_description_is_safe_and_contains_only_flags(monkeypat
 def test_transcribe_demo_prints_configured_model_and_actual_device(
     tmp_path, monkeypatch, capsys
 ):
-    from scripts import transcribe_demo
+    from scripts.demos import transcribe_demo
 
     config = LocalTranscriptionConfig(model_size="tiny", device="cpu", language="en")
     wav_path = tmp_path / "sample.wav"

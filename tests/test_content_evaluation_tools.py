@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import analyze_session as analyze_cli
-from scripts.content_stability import stability_rows
-from scripts.eval_content import evaluate_ratings, spearman_correlation
+from scripts.eval.content_stability import stability_rows
+from scripts.eval.eval_content import evaluate_ratings, spearman_correlation
 from scripts.make_report import main as make_report_main
 from src.speaksure.analysis.content import analyze_content
 from src.speaksure.analysis.session_analysis import analyze_session

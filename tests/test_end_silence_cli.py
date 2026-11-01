@@ -11,7 +11,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("script_name", ["live_interview.py", "capture_demo.py"])
+@pytest.mark.parametrize("script_name", ["live_interview.py", "demos/capture_demo.py"])
 def test_end_silence_default_and_help(script_name):
     """Both command-line tools default to 2.5 seconds and explain why."""
     script_path = PROJECT_ROOT / "scripts" / script_name

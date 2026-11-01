@@ -29,6 +29,9 @@ def mean(values: list) -> float | None:
 
 def main() -> int:
     paths = sys.argv[1:]
+    if paths == ["--help"] or paths == ["-h"]:
+        print(__doc__)
+        return 0
     if not paths:
         print(__doc__)
         return 1

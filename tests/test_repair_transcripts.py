@@ -1,6 +1,6 @@
 import json
 
-from scripts.repair_transcripts import main, repair_directory, repair_session
+from scripts.tools.repair_transcripts import main, repair_directory, repair_session
 
 
 def test_repair_session_rebuilds_only_whitespace_merged_text():

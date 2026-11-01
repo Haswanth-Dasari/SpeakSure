@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from scripts.latency_report import (
+from scripts.eval.latency_report import (
     main,
     read_turn_timings,
     render_latency_report,

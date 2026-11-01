@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.record_eval_clips import (
+from scripts.eval.record_eval_clips import (
     _review_reference,
     append_evaluation_clip,
     parse_prompt_line,

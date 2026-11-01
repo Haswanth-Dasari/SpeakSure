@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.eval_content import _load_ratings, main as eval_content_main
-from scripts.eval_grammar import evaluate_cases, spans_overlap
-from scripts.make_rating_sheet import build_rating_sheet, main as rating_sheet_main
-from scripts.review_grammar_flags import main as review_main, score_review
+from scripts.eval.eval_content import _load_ratings, main as eval_content_main
+from scripts.eval.eval_grammar import evaluate_cases, spans_overlap
+from scripts.eval.make_rating_sheet import build_rating_sheet, main as rating_sheet_main
+from scripts.eval.review_grammar_flags import main as review_main, score_review
 
 
 def test_rating_sheet_is_blind_and_csv_skeleton_uses_question_ids(tmp_path):
@@ -280,4 +280,3 @@ def test_review_csv_round_trip_and_per_category_precision(tmp_path):
     assert metrics["verb_tense"]["n"] == 2
     assert metrics["verb_tense"]["precision"] == 0.5
     assert review_main(["--score", "--score-file", str(review_csv)]) == 0
-

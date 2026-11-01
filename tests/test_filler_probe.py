@@ -7,7 +7,7 @@ import wave
 import numpy as np
 import pytest
 
-from scripts.filler_probe import (
+from scripts.tools.filler_probe import (
     compare_transcripts,
     count_fillers,
     hallucination_risk,

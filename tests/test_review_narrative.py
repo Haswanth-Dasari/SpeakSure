@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.review_narrative import collect_claims, main, score_review, write_rows
+from scripts.eval.review_narrative import collect_claims, main, score_review, write_rows
 
 NARRATIVE = {
     "language": [{"quote": "I have no disagreements", "better": "I have not had any disagreements", "why": "more natural"}],

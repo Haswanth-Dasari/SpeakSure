@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from scripts.asr_benchmark import DEFAULT_MODELS, run_benchmark, write_outputs
+from scripts.eval.asr_benchmark import DEFAULT_MODELS, run_benchmark, write_outputs
 from src.speaksure.speech_to_text import TranscriptWord
 
 

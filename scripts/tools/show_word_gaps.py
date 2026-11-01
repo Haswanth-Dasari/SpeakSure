@@ -16,6 +16,9 @@ LONG_WORD_SECONDS = 0.8    # a single word lasting longer than this probably con
 
 
 def main() -> int:
+    if sys.argv[1:] in (["--help"], ["-h"]):
+        print(__doc__)
+        return 0
     if len(sys.argv) != 3:
         print(__doc__)
         return 1
